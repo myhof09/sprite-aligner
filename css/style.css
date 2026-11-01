@@ -54,6 +54,7 @@ details[open] summary { color: var(--text); margin-bottom: 4px; }
 .row.slider input[type=range] { width: 100%; min-width: 0; }
 .row output { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
 .row.even > * { flex: 1; }
+.row > label { white-space: nowrap; }
 .chips { flex-wrap: wrap; }
 .chips button { height: 22px; font-size: 11px; padding: 0 6px; }
 .iconrow { display: flex; gap: 4px; margin: 2px 0 6px; }
@@ -72,6 +73,11 @@ details[open] summary { color: var(--text); margin-bottom: 4px; }
 #fxJson { width: 100%; background: #14161b; color: var(--text); border: 1px solid var(--btnLine); border-radius: 4px;
   font: 11px/1.35 ui-monospace, Consolas, monospace; padding: 4px; resize: vertical; margin-top: 4px; }
 .bad { color: #ff8a6a; }
+#gallery { width: min(860px, 94vw); max-height: 90vh; overflow: auto; }
+.galgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.galcard { border: 1px solid var(--line); border-radius: 6px; padding: 6px; text-align: center; cursor: pointer; font-size: 11px; color: var(--dim); }
+.galcard:hover { border-color: var(--accent); color: var(--text); }
+.galcard canvas { width: 64px; height: 64px; margin: 0 auto 4px; }
 
 /* main */
 main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -112,3 +118,5 @@ dialog h3 { margin-top: 0; font-size: 13px; color: var(--accent); text-transform
 dialog td { padding: 3px 10px 3px 0; vertical-align: top; }
 dialog td:first-child { color: var(--sel); white-space: nowrap; }
 dialog form { text-align: right; margin-top: 10px; }
+.autoinfo { font-size: 11px; color: var(--dim); line-height: 1.6; margin: 4px 0; }
+.autoinfo .fast { color: var(--sel); font-weight: 600; }

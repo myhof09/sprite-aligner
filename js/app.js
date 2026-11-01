@@ -31,6 +31,8 @@
     compareMode: 'before',
     effects: [],  // effect instances, see addEffect()
     showEffects: true, effectsMode: 'separate',
+    // automatic effects: tracked blade tip per frame (cell px) + chosen look
+    autoFx: { tips: [], style: 'whiteblue', shape: 'tapered', trail: true, spark: true, dust: true },
     frames: [],   // { box:{x,y,w,h}, raw, dur, ox, oy, edits:Map, fx:Map, pixel } + derived pre, base, img, x0, y0, canvas, anchor, fxImg, autoPixel, head…
   };
   const assets = new Map();   // effect assets: id → { name, frames:[canvas], durations, spec?, url? }
@@ -370,10 +372,61 @@
   // ---------- pxf.graph@1 recipes ----------
   const BLEND_FROM_GAME = { add: 'lighter', normal: 'source-over', screen: 'screen' };
 
-  /** Render a recipe into asset fields (frames, durations, …). */
-  function renderRecipe(recipe, ropts) {
-    const r = PXF.render(recipe, ropts);
-    return { name: recipe.name || '레시피', frames: r.frames, durations: r.durations, loop: r.loop, game: r.game, warnings: r.warnings, recipe, ropts };
+  /** Render a recipe into asset fields (frames, durations, …). `slash` = trail shape / slash controls (optional). */
+  function renderRecipe(recipe, ropts, slash = null) {
+    const r = PXF.render(slash ? PXF_SLASH.apply(recipe, slash) : recipe, ropts);
+    return { name: recipe.name || '레시피', frames: r.frames, durations: r.durations, loop: r.loop, game: r.game, warnings: r.warnings, recipe, ropts, slash };
+  }
+
+  /** Recipe by starter key: "slash:<name>" for slash recipes, else the five general starters. */
+  const starterRecipe = key => key.startsWith('slash:') ? PXF_SLASH.recipe(key.slice(6)) : JSON.parse(JSON.stringify(PXF_STARTERS[key]));
+
+  const SLASH_IDS = ['slAngle', 'slCurve', 'slRadius', 'slThick', 'slFade', 'slSparkle'];
+  /** Slash controls → settings object (stored on the asset, saved in the project). */
+  const readSlash = () => ({ shape: $('slShape').value, theme: $('slTheme').value, angle: +$('slAngle').value, curve: +$('slCurve').value,
+    radius: +$('slRadius').value, thick: +$('slThick').value, fade: +$('slFade').value, sparkle: +$('slSparkle').value });
+  function showSlash(a) {
+    const s = a.slash || {};
+    $('slShape').value = s.shape || 'original'; $('slTheme').value = s.theme || '';
+    $('slAngle').value = s.angle || 0; $('slCurve').value = s.curve || 1; $('slRadius').value = s.radius || 1; $('slThick').value = s.thick || 1; $('slFade').value = s.fade || 1;
+    $('slSparkle').value = s.sparkle ?? PXF_SLASH.sparkleTotal(a.recipe);
+    $('slShape').disabled = !PXF_SLASH.hasArc(a.recipe);
+    SLASH_IDS.forEach(id => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; });
+  }
+
+  // ---------- gallery: animated thumbnails of recipes and trail shapes ----------
+  let galTimer = 0;
+  function openGallery() {
+    const thumbs = [];
+    const card = (label, graph, onPick) => {
+      const d = document.createElement('div'), c = document.createElement('canvas'), t = document.createElement('div');
+      d.className = 'galcard'; t.textContent = label; c.width = c.height = 64;
+      try { thumbs.push({ c, frames: PXF.render(graph).frames }); } catch { t.textContent += ' (오류)'; }
+      d.append(c, t); d.onclick = () => { $('gallery').close(); onPick(); };
+      return d;
+    };
+    const rec = $('galRecipes'), shp = $('galShapes');
+    rec.innerHTML = ''; shp.innerHTML = '';
+    for (const k of PXF_SLASH.RECIPE_ORDER) rec.append(card(PXF_SLASH.RECIPE_LABELS[k], PXF_SLASH.recipe(k), () => addRecipe(PXF_SLASH.recipe(k))));
+    for (const [k, g] of Object.entries(PXF_STARTERS)) rec.append(card(g.name, g, () => addRecipe(starterRecipe(k))));
+    // shapes are shown on the selected slash recipe (or a plain horizontal slash)
+    const e = fxInst(fxSel), a = e && assets.get(e.asset), base = a && a.recipe && PXF_SLASH.hasArc(a.recipe) ? a.recipe : PXF_SLASH.recipe('horizontal');
+    for (const [k, label] of Object.entries(PXF_SLASH.SHAPES)) shp.append(card(label, PXF_SLASH.apply(base, { ...(a && a.slash), shape: k }), () => {
+      if (a && a.recipe && PXF_SLASH.hasArc(a.recipe)) { a.slash = { ...(a.slash || readSlash()), shape: k }; showSlash(a); rerenderRecipe(0); }
+      else { addRecipe(PXF_SLASH.recipe('horizontal')); const n = assets.get(fxInst(fxSel).asset); n.slash = { shape: k }; $('fxRecipe').dataset.asset = ''; buildFxList(); rerenderRecipe(0); }
+    }));
+    let f = 0;
+    clearInterval(galTimer);
+    galTimer = setInterval(() => {
+      f++;
+      for (const t of thumbs) {
+        const g = t.c.getContext('2d'), fr = t.frames[f % (t.frames.length + 4)];   // short pause between loops
+        g.imageSmoothingEnabled = false;
+        g.fillStyle = '#23262e'; g.fillRect(0, 0, 64, 64);
+        if (fr) g.drawImage(fr, 0, 0, 64, 64);
+      }
+    }, 70);
+    $('gallery').showModal();
   }
 
   /** Timing that makes the recipe's impactFrame play exactly when our impact frame starts: {start, offset, len}. */
@@ -415,8 +468,12 @@
       let recipe;
       try { recipe = JSON.parse($('fxJson').value); } catch (err) { $('fxJsonMsg').textContent = 'JSON 오류: ' + err.message; $('fxJsonMsg').className = 'bad'; return; }
       const ropts = { scale: +$('rScale').value, hue: +$('rHue').value, speed: +$('rSpeed').value };
+      const slash = readSlash();
+      if (!slash.theme) delete slash.theme;
+      if (slash.sparkle === PXF_SLASH.sparkleTotal(recipe)) delete slash.sparkle;   // untouched: keep the recipe's own counts
       try {
-        Object.assign(a, renderRecipe(recipe, ropts), { version: a.version + 1 });
+        Object.assign(a, renderRecipe(recipe, ropts, slash), { version: a.version + 1 });
+        if (slash.theme === 'ink' && e.blend === 'lighter') e.blend = 'source-over';   // black ink is invisible when added
         e.name = a.name;
         Object.assign(e, impactTiming(a));   // speed / impactFrame may have changed: keep the impact lined up
         $('fxJsonMsg').textContent = `${a.frames.length}프레임 · ${a.frames[0].width}px` + (a.warnings.length ? ` · 그리지 않는 노드: ${a.warnings.join(', ')}` : ' · 렌더 완료');
@@ -467,24 +524,212 @@
     }
   }
 
-  /** Blade tip per frame: the bright, grey (steel) pixel farthest from the body centre. */
+  /**
+   * Blade tip of a frame (cell px), or null when no blade is out. Steel = bright, grey pixels; they are grouped
+   * (8-neighbour) and the blade is the long, thin group (score length² / area, length ≥ 20% of the sprite height),
+   * so white socks, belts and highlights (short blobs) are ignored. The tip is the end farthest from the body.
+   */
+  function bladeTip(f) {
+    const d = f.img.data, w = f.img.w, steel = new Map();
+    for (let y = 0; y < f.img.h; y++) for (let x = 0; x < w; x++) {
+      const j = (y * w + x) * 4;
+      if (!d[j + 3]) continue;
+      const mx = Math.max(d[j], d[j + 1], d[j + 2]), mn = Math.min(d[j], d[j + 1], d[j + 2]);
+      if ((d[j] + d[j + 1] + d[j + 2]) / 3 >= 170 && mx - mn <= 40) steel.set(K(x, y), 1);
+    }
+    const minLen = Math.max(12, f.img.h * 0.2);
+    let blade = null, bestScore = 0;
+    for (const g of IO.groups(steel)) {
+      const xs = g.map(KX), ys = g.map(KY), len = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      const score = len * len / g.length;
+      if (len >= minLen && score > bestScore) { bestScore = score; blade = g; }
+    }
+    if (!blade) return null;
+    const cx = f.anchor.bx, cy = f.anchor.by * 0.55;
+    let tip = blade[0], bd = -1;
+    for (const k of blade) { const dd = (KX(k) - cx) ** 2 + (KY(k) - cy) ** 2; if (dd > bd) { bd = dd; tip = k; } }
+    return { x: f.ox + f.x0 + KX(tip), y: f.oy + f.y0 + KY(tip) };
+  }
+
   function findBladeTips(e) {
     let n = 0;
     for (let i = e.start; i < e.start + e.len && i < S.frames.length; i++) {
-      const f = S.frames[i], d = f.img.data, cx = f.anchor.bx, cy = f.anchor.by * 0.55;
-      let best = null, bd = -1;
-      for (let y = 0; y < f.img.h; y++) for (let x = 0; x < f.img.w; x++) {
-        const j = (y * f.img.w + x) * 4;
-        if (!d[j + 3]) continue;
-        const mx = Math.max(d[j], d[j + 1], d[j + 2]), mn = Math.min(d[j], d[j + 1], d[j + 2]);
-        if ((d[j] + d[j + 1] + d[j + 2]) / 3 < 150 || mx - mn > 45) continue;
-        const dist = (x - cx) ** 2 + (y - cy) ** 2;
-        if (dist > bd) { bd = dist; best = [x, y]; }
-      }
-      if (best) { e.keys[i] = { x: f.ox + f.x0 + best[0], y: f.oy + f.y0 + best[1] }; n++; }
+      const t = bladeTip(S.frames[i]);
+      if (t) { e.keys[i] = t; n++; }
     }
     e.follow = true;
     return n;
+  }
+
+  // ---------- automatic effects: trail along the tracked tip, hit spark, dust at the feet ----------
+  const FADE_FRAMES = 2;   // frames a trail takes to vanish after the swing
+
+  /** Tip in every frame; frames where none was found get the in-between of their neighbours. */
+  function trackTips() {
+    const t = S.frames.map(bladeTip), known = t.map((p, i) => p ? i : -1).filter(i => i >= 0);
+    if (!known.length) return t.map(() => ({ x: Math.round(S.cellW / 2), y: Math.round(S.cellH / 3) }));
+    return t.map((p, i) => {
+      if (p) return p;
+      const a = known.filter(k => k < i).pop(), b = known.find(k => k > i);
+      if (a === undefined) return { ...t[b] };
+      if (b === undefined) return { ...t[a] };
+      const u = (i - a) / (b - a);
+      return { x: Math.round(t[a].x + (t[b].x - t[a].x) * u), y: Math.round(t[a].y + (t[b].y - t[a].y) * u) };
+    });
+  }
+
+  /** Tip movement (px) into each frame, and the swings: runs of frames where it is fast. */
+  function swingInfo(tips) {
+    const sp = tips.map((p, i) => i ? Math.hypot(p.x - tips[i - 1].x, p.y - tips[i - 1].y) : 0);
+    const thr = Math.max(4, Math.max(...sp) * 0.35), swings = [];
+    sp.forEach((v, i) => {
+      if (v < thr) return;
+      const last = swings[swings.length - 1];
+      if (last && last.b === i - 1) last.b = i; else swings.push({ a: i, b: i });
+    });
+    swings.forEach(s => { s.peak = Math.max(...sp.slice(s.a, s.b + 1)); });
+    return { sp, thr, swings };
+  }
+
+  /** Smooth curve through points (Catmull-Rom), about one sample per pixel so the stamped trail has no gaps. */
+  function smoothPath(pts) {
+    if (pts.length < 2) return pts.slice();
+    const out = [], P = i => pts[Math.max(0, Math.min(pts.length - 1, i))];
+    for (let i = 0; i < pts.length - 1; i++) for (let s = 0, k = Math.max(4, Math.ceil(Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y))); s < k; s++) {
+      const t = s / k, p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2), t2 = t * t, t3 = t2 * t;
+      const c = (a, b, c2, d) => 0.5 * (2 * b + (-a + c2) * t + (2 * a - 5 * b + 4 * c2 - d) * t2 + (-a + 3 * b - 3 * c2 + d) * t3);
+      out.push({ x: c(p0.x, p1.x, p2.x, p3.x), y: c(p0.y, p1.y, p2.y, p3.y) });
+    }
+    out.push(pts[pts.length - 1]);
+    return out;
+  }
+
+  /**
+   * One cell-sized canvas per character frame with the trail: the smoothed tip path of the current swing up to
+   * this frame, thick and bright at the head, thin and dark at the tail (palette bands of the chosen style).
+   * After the swing the tail is eaten away over FADE_FRAMES frames. The shape option changes the thickness profile
+   * or adds a pattern.
+   */
+  function trailFrames() {
+    const A = S.autoFx, tips = A.tips, { swings } = swingInfo(tips), shape = A.shape;
+    const cols = PXF_SLASH.THEMES[A.style].colors.map(hexToRgb), W = S.cellW, H = S.cellH;
+    return S.frames.map((_, i) => {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      const s = swings.find(w => i >= w.a && i <= w.b + FADE_FRAMES);
+      if (!s) return c;
+      const path = smoothPath(tips.slice(Math.max(0, s.a - 1), Math.min(i, s.b) + 1));
+      const fade = i > s.b ? (i - s.b) / (FADE_FRAMES + 1) : 0, maxW = Math.max(2, Math.min(9, 2 + s.peak * 0.18));
+      const buf = new Float32Array(W * H), stamp = (x, y, r, v) => {
+        for (let yy = Math.floor(y - r); yy <= y + r; yy++) for (let xx = Math.floor(x - r); xx <= x + r; xx++) {
+          if (xx < 0 || yy < 0 || xx >= W || yy >= H || (xx + 0.5 - x) ** 2 + (yy + 0.5 - y) ** 2 > r * r) continue;
+          buf[yy * W + xx] = Math.max(buf[yy * W + xx], v);
+        }
+      };
+      const n = path.length;
+      for (let j = 0; j < n; j++) {
+        const u = n > 1 ? j / (n - 1) : 1;
+        if (u < fade) continue;
+        const p = path[j], q = path[Math.max(0, j - 1)], len = Math.hypot(p.x - q.x, p.y - q.y) || 1;
+        const nx = -(p.y - q.y) / len, ny = (p.x - q.x) / len;   // normal to the path
+        const v = (0.3 + 0.7 * u) * (1 - fade * 0.6);
+        let w = maxW * u ** 1.5, off = 0;
+        switch (shape) {
+          case 'crescent': w = maxW * 0.5 * u ** 1.8; break;
+          case 'halfmoon': w = maxW * (0.6 + 0.4 * u); break;
+          case 'comet': w = maxW * u ** 2.2; break;
+          case 'ribbon': off = Math.sin(j * 0.25) * maxW * 0.4; w = maxW * 0.6 * u ** 1.2; break;
+          case 'segmented': if (Math.floor(j / 5) % 2) continue; break;
+          case 'jagged': off = (Math.floor(j / 2) % 2 ? 1 : -1) * Math.min(2, maxW * 0.3) * u; break;
+          case 'zigzag': off = ((j % 8) < 4 ? (j % 4) - 2 : 2 - (j % 4)) * maxW * 0.25; w = Math.max(1, maxW * 0.25); break;
+          case 'double': stamp(p.x + nx * maxW * 0.45, p.y + ny * maxW * 0.45, Math.max(0.5, maxW * 0.15 * u), v); off = -maxW * 0.45; w = maxW * 0.3 * u; break;
+        }
+        stamp(p.x + nx * off, p.y + ny * off, Math.max(0.5, w / 2), v);
+      }
+      if (shape === 'comet' && fade === 0 && n) stamp(path[n - 1].x, path[n - 1].y, maxW * 0.45, 1);
+      const g = c.getContext('2d'), img = g.createImageData(W, H);
+      for (let p = 0; p < W * H; p++) {
+        if (buf[p] < 0.12) continue;
+        const col = cols[Math.min(cols.length - 1, Math.floor((buf[p] - 0.12) / 0.88 * cols.length))];
+        img.data.set([col[0], col[1], col[2], 255], p * 4);
+      }
+      g.putImageData(img, 0, 0);
+      return c;
+    });
+  }
+
+  /** Feet of a frame (cell px): left / right ends of the lowest body rows. */
+  function feet(f) {
+    const d = f.img.data, w = f.img.w, by = Math.max(0, Math.round(f.anchor.by) - 2);
+    let l = Infinity, r = -Infinity;
+    for (let y = by; y < f.img.h; y++) for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3]) { l = Math.min(l, x); r = Math.max(r, x); }
+    const ox = f.ox + f.x0;
+    return l > r ? null : { l: ox + l, r: ox + r, top: f.oy + f.y0 };
+  }
+
+  /** Frames where the feet / body move a lot (lunge, stomp): at most two, not next to each other. */
+  function strongSteps() {
+    const ft = S.frames.map(feet), m = ft.map((p, i) => i && p && ft[i - 1] ? Math.abs(p.l - ft[i - 1].l) + Math.abs(p.r - ft[i - 1].r) + Math.abs(p.top - ft[i - 1].top) * 0.5 : 0);
+    const thr = Math.max(4, Math.max(...m) * 0.6);
+    const picks = m.map((v, i) => ({ v, i })).filter(o => o.v >= thr).sort((a, b) => b.v - a.v);
+    const out = [];
+    for (const o of picks) if (out.length < 2 && out.every(p => Math.abs(p - o.i) > 1)) out.push(o.i);
+    return out.sort((a, b) => a - b).map(i => ({ i, x: Math.round((ft[i].l + ft[i].r) / 2) }));
+  }
+
+  const makeInst = (assetId, extra) => {
+    const a = assets.get(assetId);
+    return { id: 'e' + nextId++, asset: assetId, name: a.name, start: 0, len: S.frames.length, x: 0, y: 0, scale: 1, rot: 0, flip: false,
+      blend: 'source-over', opacity: 1, follow: false, keys: {}, ...extra };
+  };
+
+  /** ✨ 자동 이펙트: (re)build the trail, spark and dust; retrack = find the tips again. */
+  function runAutoFx(retrack = true) {
+    if (!S.frames.length) { status('먼저 그림을 여세요.'); return; }
+    pushUndo();
+    const A = S.autoFx;
+    if (retrack || A.tips.length !== S.frames.length) A.tips = trackTips();
+    S.effects = S.effects.filter(e => !e.auto);
+    const glow = A.style === 'ink' ? 'source-over' : 'lighter', made = [];
+    if (A.trail && swingInfo(A.tips).swings.length) {
+      const id = addAsset({ name: '자동 궤적', frames: trailFrames(), durations: null, kind: 'autoTrail' });
+      S.effects.push(makeInst(id, { auto: 'trail', x: S.cellW / 2, y: S.cellH / 2, blend: glow }));
+      made.push('궤적');
+    }
+    if (A.spark) {
+      const a = renderRecipe(starterRecipe('spark'), { scale: 1, hue: 0, speed: 1 }, { theme: A.style });
+      const id = addAsset(a), tip = A.tips[S.impact];
+      S.effects.push(makeInst(id, { ...impactTiming(a), auto: 'spark', x: tip.x, y: tip.y, blend: glow }));
+      made.push('타격 불꽃');
+    }
+    if (A.dust) for (const st of strongSteps()) {
+      const a = renderRecipe(starterRecipe('dust'), { scale: 1, hue: 0, speed: 1 });
+      const id = addAsset(a);
+      // the dust recipe puffs ~13 px below its centre: put that on the feet line
+      S.effects.push(makeInst(id, { auto: 'dust', start: st.i, len: Math.min(4, S.frames.length - st.i), x: st.x, y: S.guides.base - 13 }));
+      made.push(`먼지 #${st.i}`);
+    }
+    fxSel = null;
+    render();
+    const { swings } = swingInfo(A.tips);
+    status(`자동 이펙트: ${made.join(', ') || '없음'} · 휘두름 ${swings.map(s => `#${s.a}–#${s.b}`).join(', ') || '없음'}. 편집 창의 노란 ◆(칼끝)를 끌어 고치세요.`);
+  }
+
+  /** After a tip is dragged or the style changes: redraw the trail and move the spark, keep everything else. */
+  function refreshAutoFx() {
+    const A = S.autoFx;
+    for (const e of S.effects) {
+      const a = assets.get(e.asset);
+      if (e.auto === 'trail' && a) { a.frames = trailFrames(); a.version++; }
+      if (e.auto === 'spark' && A.tips[S.impact]) { e.x = A.tips[S.impact].x; e.y = A.tips[S.impact].y; }
+    }
+  }
+
+  function buildAutoInfo() {
+    const A = S.autoFx, el = $('autoInfo');
+    if (!A.tips.length || A.tips.length !== S.frames.length) { el.textContent = ''; return; }
+    const { sp, thr } = swingInfo(A.tips);
+    el.innerHTML = '칼끝 속도 (px/프레임): ' + sp.map((v, i) => `<span class="${v >= thr ? 'fast' : ''}">#${i} ${Math.round(v)}</span>`).join(' ');
   }
 
   /** Effect editor in step ④ for the selected instance. */
@@ -522,6 +767,7 @@
       $('fxJson').value = JSON.stringify(a.recipe, null, 1);
       $('rScale').value = a.ropts.scale; $('rHue').value = a.ropts.hue; $('rSpeed').value = a.ropts.speed;
       ['rScale', 'rHue', 'rSpeed'].forEach(id => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; });
+      showSlash(a);
       $('fxJsonMsg').textContent = '';
     }
     const p = fxPos(e, cur);
@@ -532,7 +778,29 @@
     const edit = fn => () => { const e = fxInst(fxSel); if (!e) return; pushUndo(); fn(e); render(); };
     $('btnFxAdd').onclick = addBuiltin;
     $('fileRecipe').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) importRecipes(files); };
-    $('btnStarter').onclick = () => addRecipe(JSON.parse(JSON.stringify(PXF_STARTERS[$('starter').value])));
+    $('btnStarter').onclick = () => addRecipe(starterRecipe($('starter').value));
+    for (const k of PXF_SLASH.RECIPE_ORDER) $('starterSlash').append(new Option(PXF_SLASH.RECIPE_LABELS[k], 'slash:' + k));
+    for (const [k, label] of Object.entries(PXF_SLASH.SHAPES)) $('slShape').append(new Option(label, k));
+    for (const [k, t] of Object.entries(PXF_SLASH.THEMES)) $('slTheme').append(new Option(t.label, k));
+    $('slShape').onchange = $('slTheme').onchange = () => rerenderRecipe(0);
+    for (const id of SLASH_IDS) {
+      $(id).oninput = () => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; };
+      $(id).onchange = () => rerenderRecipe(0);
+    }
+    $('btnGallery').onclick = openGallery;
+    // automatic effects
+    for (const [k, label] of Object.entries({ whiteblue: '기본 (흰·파랑)', gold: '금빛', fire: '화염', ice: '얼음', ink: '먹 (잉크)', volt: '번개' })) $('autoStyle').append(new Option(label, k));
+    for (const k of ['tapered', 'crescent', 'halfmoon', 'comet', 'ribbon', 'segmented', 'jagged', 'double', 'zigzag']) $('autoShape').append(new Option(PXF_SLASH.SHAPES[k], k));
+    const autoSync = () => { $('autoStyle').value = S.autoFx.style; $('autoShape').value = S.autoFx.shape; ['trail', 'spark', 'dust'].forEach(k => { $('auto_' + k).checked = S.autoFx[k]; }); };
+    autoSync();
+    const autoChanged = () => {
+      Object.assign(S.autoFx, { style: $('autoStyle').value, shape: $('autoShape').value, trail: $('auto_trail').checked, spark: $('auto_spark').checked, dust: $('auto_dust').checked });
+      if (S.effects.some(e => e.auto)) runAutoFx(false);   // live: rebuild with the same tips
+    };
+    ['autoStyle', 'autoShape', 'auto_trail', 'auto_spark', 'auto_dust'].forEach(id => { $(id).onchange = autoChanged; });
+    $('btnAutoFx').onclick = () => runAutoFx(true);
+    window.addEventListener('sa-project-loaded', autoSync);
+    $('gallery').addEventListener('close', () => clearInterval(galTimer));
     $('fxJson').oninput = () => rerenderRecipe(400);
     for (const id of ['rScale', 'rHue', 'rSpeed']) {
       $(id).oninput = () => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; };
@@ -575,11 +843,14 @@
   const snapshot = () => ({
     frames: S.frames.map(f => ({ f, ox: f.ox, oy: f.oy, edits: new Map(f.edits), fx: new Map(f.fx) })),
     impact: S.impact, impactPoint: S.impactPoint, cur, effects: JSON.parse(JSON.stringify(S.effects)),
+    tips: JSON.parse(JSON.stringify(S.autoFx.tips)),
   });
   function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
   function restore(s) {
     S.frames = s.frames.map(e => { Object.assign(e.f, { ox: e.ox, oy: e.oy, edits: new Map(e.edits), fx: new Map(e.fx) }); compose(e.f); return e.f; });
     S.impact = s.impact; S.impactPoint = s.impactPoint; cur = s.cur; S.effects = s.effects;
+    S.autoFx.tips = s.tips || [];
+    refreshAutoFx();
     if (!fxInst(fxSel)) fxSel = null;
     selection.clear(); render();
   }
@@ -619,6 +890,19 @@
     const x = (p.x + 0.5) * z, y = (p.y + 0.5) * z, r = Math.max(4, z * 1.5);
     g.strokeStyle = strong ? '#ff3b6b' : 'rgba(255,59,107,0.4)'; g.lineWidth = 2;
     g.beginPath(); g.arc(x, y, r, 0, 7); g.moveTo(x - r * 1.6, y); g.lineTo(x + r * 1.6, y); g.moveTo(x, y - r * 1.6); g.lineTo(x, y + r * 1.6); g.stroke();
+  }
+
+  /** Tracked blade tips: faint path of all frames, the current frame's tip as a draggable yellow diamond. */
+  function drawTips(g, z, i, small = false) {
+    const t = S.autoFx.tips;
+    if (t.length !== S.frames.length || !t[i]) return;
+    if (!small) {
+      g.strokeStyle = 'rgba(255,212,90,0.45)'; g.lineWidth = 1;
+      g.beginPath(); t.forEach((p, j) => j ? g.lineTo((p.x + 0.5) * z, (p.y + 0.5) * z) : g.moveTo((p.x + 0.5) * z, (p.y + 0.5) * z)); g.stroke();
+    }
+    const x = (t[i].x + 0.5) * z, y = (t[i].y + 0.5) * z, r = small ? 2 : Math.max(4, z);
+    g.fillStyle = '#ffd45a'; g.strokeStyle = '#000';
+    g.beginPath(); g.moveTo(x, y - r); g.lineTo(x + r, y); g.lineTo(x, y + r); g.lineTo(x - r, y); g.closePath(); g.fill(); if (!small) g.stroke();
   }
 
   const blitFrame = (g, f, z, a = 1) => {
@@ -705,6 +989,7 @@
     if (!S.frames.length) { $('editor').width = 0; $('frameInfo').textContent = ''; return; }
     const g = drawCell($('editor'), S.zoom, cur, { onion: S.onion, grid: S.grid, labels: true, fx: true, sel: true });
     drawImpactPoint(g, S.zoom, cur === S.impact);
+    drawTips(g, S.zoom, cur);
     const se = fxInst(fxSel), pl = se && S.showEffects && fxPlaced(se, cur);
     if (pl) {   // selected effect: dashed box
       const z = S.zoom;
@@ -836,7 +1121,7 @@
     $('impactInfo').textContent = S.frames.length ? `임팩트 프레임: #${S.impact}` + (S.impactPoint ? ` · 지점 (${S.impactPoint.x}, ${S.impactPoint.y})` : ' · 지점 없음') : '';
   }
   const thumbZoom = () => Math.max(1, Math.min(3, Math.floor(100 / S.cellH)));
-  const drawThumb = i => thumbs[i] && drawCell(thumbs[i], thumbZoom(), i, { guides: true, sel: true });
+  const drawThumb = i => { if (thumbs[i]) drawTips(drawCell(thumbs[i], thumbZoom(), i, { guides: true, sel: true }), thumbZoom(), i, true); };
 
   function render() {
     cur = Math.min(cur, Math.max(0, S.frames.length - 1));
@@ -845,7 +1130,7 @@
       if (S.head.frame < 0) S.head = null;
     }
     S.impact = Math.min(S.impact, Math.max(0, S.frames.length - 1));
-    drawSource(); drawEditor(); drawPreview(); drawCompare(); buildStrip(); buildHeadList(); buildFxList();
+    drawSource(); drawEditor(); drawPreview(); drawCompare(); buildStrip(); buildHeadList(); buildFxList(); buildAutoInfo();
     const f = S.frames[cur];
     $('framePixel').value = f && f.pixel ? f.pixel : '';
     $('framePixel').placeholder = f ? String(pixelOf(f)) : '';
@@ -1245,7 +1530,11 @@
       if (!f) return;
       const p = cellXY(e);
       cv.setPointerCapture(e.pointerId);
-      if (tool === 'move') {
+      const tip = S.autoFx.tips.length === S.frames.length && S.autoFx.tips[cur];
+      if (tool === 'move' && tip && Math.hypot(e.offsetX - (tip.x + 0.5) * S.zoom, e.offsetY - (tip.y + 0.5) * S.zoom) <= Math.max(6, S.zoom)) {
+        pushUndo();
+        ed = { tip: true };   // drag the tracked blade tip of this frame
+      } else if (tool === 'move') {
         const hit = guideHit(e);
         if (!hit) pushUndo();
         ed = hit ? { guide: hit } : { mx: e.offsetX, my: e.offsetY, ox: f.ox, oy: f.oy };
@@ -1292,8 +1581,12 @@
         const lim = ed.guide.v ? S.cellW : S.cellH;
         S.guides[ed.guide.k] = Math.max(0, Math.min(lim, Math.round((ed.guide.v ? e.offsetX : e.offsetY) / z)));
         drawEditor(); thumbs.forEach((_, i) => drawThumb(i));
+      } else if (ed.tip) {
+        S.autoFx.tips[cur] = { x: Math.max(0, Math.min(S.cellW - 1, p.x)), y: Math.max(0, Math.min(S.cellH - 1, p.y)) };
+        refreshAutoFx();
+        drawEditor(); drawThumb(cur); drawPreview();
       } else if (ed.fx) {
-        const pos = { x: ed.x + Math.round((e.offsetX - ed.mx) / z), y: ed.y + Math.round((e.offsetY - ed.my) / z) };
+        const pos ={ x: ed.x + Math.round((e.offsetX - ed.mx) / z), y: ed.y + Math.round((e.offsetY - ed.my) / z) };
         if (ed.fx.follow) ed.fx.keys[cur] = pos; else Object.assign(ed.fx, pos);
         drawEditor(); drawPreview();
       } else if (ed.paint) {
@@ -1325,7 +1618,7 @@
         selectByCell((x, y) => x >= x0 && x < x1 && y >= y0 && y < y1, done.add);
       } else if (done.shape === 'lasso' && done.pts.length > 2) {
         selectByCell((x, y) => pointInPoly(x, y, done.pts), done.add);
-      } else if (done.fx || done.paint) {
+      } else if (done.fx || done.paint || done.tip) {
         render(); return;
       } else if (!done.shape) {
         if (!done.guide) { drawThumb(cur); buildFxList(); }
@@ -1545,7 +1838,8 @@
     // effect assets: built-ins as their recipe, imported ones as a strip image + frame widths
     const used = new Set(S.effects.map(e => e.asset));
     const fxAssets = [...assets].filter(([id]) => used.has(id)).map(([id, a]) => a.spec ? { id, name: a.name, spec: a.spec }
-      : a.recipe ? { id, name: a.name, recipe: a.recipe, ropts: a.ropts }
+      : a.recipe ? { id, name: a.name, recipe: a.recipe, ropts: a.ropts, slash: a.slash || null }
+      : a.kind === 'autoTrail' ? { id, name: a.name, kind: 'autoTrail' }
       : { id, name: a.name, strip: FX.strip(a.frames).toDataURL('image/png'), widths: a.frames.map(c => c.width), durations: a.durations });
     return JSON.stringify({ app: 'sprite-aligner', version: 3, ...settings, fxAssets,
       frames: frames.map(f => ({ box: f.box, raw: f.raw, dur: f.dur, ox: f.ox, oy: f.oy, pixel: f.pixel || null, edits: [...f.edits], fx: [...f.fx] })) });
@@ -1555,8 +1849,9 @@
     assets.clear(); fxCache.clear();
     for (const a of list) {
       if (a.spec) { assets.set(a.id, { ...FX.builtin(a.spec.type, a.spec.color, a.spec.size), name: a.name, spec: a.spec, version: 1 }); continue; }
+      if (a.kind === 'autoTrail') { assets.set(a.id, { name: a.name, frames: [document.createElement('canvas')], durations: null, kind: 'autoTrail', version: 1 }); continue; }
       if (a.recipe) {
-        try { assets.set(a.id, { ...renderRecipe(a.recipe, a.ropts), version: 1 }); }
+        try { assets.set(a.id, { ...renderRecipe(a.recipe, a.ropts, a.slash), version: 1 }); }
         catch (err) { status(`레시피 "${a.name}" 오류: ${err.message}`); assets.set(a.id, { name: a.name, frames: [document.createElement('canvas')], durations: null, version: 1 }); }
         continue;
       }
@@ -1590,6 +1885,9 @@
     applyPalettes();
     if (S.head) compareHeads();
     S.frames.forEach(f => { f.placed = true; });
+    S.autoFx = { tips: [], style: 'whiteblue', shape: 'tapered', trail: true, spark: true, dust: true, ...(p.autoFx || {}) };
+    refreshAutoFx();   // the auto trail is redrawn from the saved tips
+    window.dispatchEvent(new Event('sa-project-loaded'));
     cur = 0; boxSel.clear(); selection.clear();
     undoStack.length = redoStack.length = 0;
     syncInputs(); render(); openStep(3);
