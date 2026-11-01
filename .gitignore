@@ -1,0 +1,4 @@
+_local/
+*.sprite-aligner.json
+.DS_Store
+Thumbs.db

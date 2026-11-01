@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sprite Aligner</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<aside id="side">
+  <h1>Sprite Aligner <small>모든 처리는 브라우저 안에서만 (업로드 없음)</small></h1>
+
+  <section>
+    <h2>1. 파일</h2>
+    <div class="row">
+      <label class="btn">PNG 열기<input type="file" id="fileImg" accept="image/*" hidden></label>
+      <button id="btnSample">샘플</button>
+    </div>
+    <div class="row">
+      <label class="btn">프로젝트 열기<input type="file" id="fileProj" accept=".json,application/json" hidden></label>
+      <button id="btnSaveProj">프로젝트 저장</button>
+    </div>
+    <div class="row"><span>이름</span><input id="name" type="text" value="sprite"></div>
+  </section>
+
+  <section>
+    <h2>2. 배경 제거</h2>
+    <div class="row"><span>키 색</span><input id="keyColor" type="color"><button id="btnPickKey" data-mode="pick">스포이트</button></div>
+    <div class="row"><span>허용오차</span><input id="tol" type="range" min="10" max="250"><output for="tol"></output></div>
+    <div class="row"><span>가장자리</span><input id="edge" type="range" min="0" max="200"><output for="edge"></output></div>
+    <div class="row"><span>디스필</span><input id="despill" type="range" min="0" max="1" step="0.1"><output for="despill"></output></div>
+    <label class="chk"><input id="showKeyed" type="checkbox" checked> 원본 창에 배경 제거 결과 보기</label>
+  </section>
+
+  <section>
+    <h2>3. 프레임</h2>
+    <div class="row"><span>몸체 기준</span><input id="bodyFrac" type="range" min="0.05" max="0.8" step="0.05"><output for="bodyFrac"></output></div>
+    <div class="row"><button id="btnDetect">자동 감지</button></div>
+    <div class="row modes">
+      <button data-mode="select">선택</button><button data-mode="add">박스 추가</button><button data-mode="split">분할</button>
+    </div>
+    <div class="row"><button id="btnMerge">병합</button><button id="btnDelete">삭제</button></div>
+    <p class="hint">원본 창: 선택=클릭(Shift 다중) · 추가=드래그 · 분할=자를 x 위치 클릭</p>
+  </section>
+
+  <section>
+    <h2>4. 픽셀</h2>
+    <div class="row"><span>가짜 픽셀 크기</span><input id="pixel" type="number" min="1" max="20" step="0.01"><button id="btnPixel">자동</button></div>
+    <div class="row" id="pixelCands"></div>
+    <div class="row"><span>색 수</span><input id="colors" type="number" min="0" max="256" step="1"><small>0=끄기</small></div>
+    <label class="chk"><input id="lone" type="checkbox"> 외톨이 가장자리 픽셀 정리 (1px)</label>
+  </section>
+
+  <section>
+    <h2>5. 셀 · 가이드</h2>
+    <div class="row"><span>셀</span><input id="cellW" type="number" min="1" max="1024"> × <input id="cellH" type="number" min="1" max="1024"></div>
+    <div class="row"><span>여백</span><input id="pad" type="number" min="0" max="64"><button id="btnAutoCell">셀 자동</button></div>
+    <div class="row"><button id="btnAutoPlace">전체 가이드에 맞춤</button></div>
+    <label class="chk"><input id="snap" type="checkbox"> 가이드에 스냅 (3px)</label>
+    <label class="chk"><input id="onion" type="checkbox"> 어니언 스킨 (이전/다음)</label>
+    <label class="chk"><input id="grid" type="checkbox"> 픽셀 격자</label>
+    <div class="row"><span>편집 확대</span><input id="zoom" type="range" min="1" max="16"><output for="zoom"></output></div>
+    <p class="hint">편집 창: 드래그=이동 · 방향키 1px · Shift 5px · 선 드래그=가이드 이동 · , . = 이전/다음 프레임</p>
+  </section>
+
+  <section>
+    <h2>6. 재생 · 내보내기</h2>
+    <div class="row"><span>임팩트 프레임</span><input id="impact" type="number" min="0" step="1"></div>
+    <div class="row"><span>GIF 배율</span><input id="gifScale" type="number" min="1" max="16"></div>
+    <div class="row"><span>GIF 배경</span><input id="gifBg" type="color"><label class="chk"><input id="gifTransparent" type="checkbox"> 투명</label></div>
+    <div class="row"><button id="btnSheet">시트 PNG</button><button id="btnMeta">메타 JSON</button><button id="btnGif">GIF</button></div>
+    <div class="row"><button id="btnAll" class="primary">모두 내보내기</button></div>
+  </section>
+  <p id="status">PNG를 열거나 샘플을 누르세요.</p>
+</aside>
+
+<main>
+  <section id="srcPane">
+    <div class="bar">원본 <span id="srcInfo"></span></div>
+    <div id="srcWrap" class="wrap"><canvas id="src"></canvas></div>
+  </section>
+  <section id="workPane">
+    <div class="panel">
+      <div class="bar">편집 <span id="frameInfo"></span></div>
+      <div class="wrap" id="editorWrap"><canvas id="editor" tabindex="0"></canvas></div>
+    </div>
+    <div class="col">
+    <div class="panel">
+      <div class="bar">미리보기
+        <button id="btnPlay">▶ 재생</button>
+        <label class="chk"><input id="loop" type="checkbox"> 반복</label>
+        <span>확대</span><input id="pzoom" type="range" min="1" max="10"><output for="pzoom"></output>
+      </div>
+      <div class="wrap"><canvas id="preview"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="bar">전/후 비교 (8×)</div>
+      <div class="wrap" id="compareWrap"><canvas id="before"></canvas><canvas id="after"></canvas></div>
+    </div>
+    </div>
+  </section>
+  <section id="strip"></section>
+</main>
+
+<script src="js/imageops.js"></script>
+<script src="js/gif.js"></script>
+<script src="js/sample.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
