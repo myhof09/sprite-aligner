@@ -7,100 +7,181 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+<header id="top">
+  <b class="logo">Sprite Aligner</b>
+  <span class="dim" title="모든 처리는 이 브라우저 안에서만 합니다. 그림은 어디에도 올라가지 않습니다.">🔒 업로드 없음</span>
+  <span class="grow"></span>
+  <label title="내보내는 파일 이름">이름 <input id="name" type="text" value="sprite"></label>
+  <label class="btn sm" title="저장해 둔 프로젝트(.json)를 열어 이어서 편집">프로젝트 열기<input type="file" id="fileProj" accept=".json,application/json" hidden></label>
+  <button id="btnSaveProj" class="sm" title="원본 그림과 모든 설정·위치·수정을 .json 하나로 저장">프로젝트 저장</button>
+  <button id="btnHelp" class="sm" title="마우스·키보드 단축키">단축키 ?</button>
+</header>
+
+<div id="body">
 <aside id="side">
-  <h1>Sprite Aligner <small>모든 처리는 브라우저 안에서만 (업로드 없음)</small></h1>
 
-  <section>
-    <h2>1. 파일</h2>
-    <div class="row">
-      <label class="btn">PNG 열기<input type="file" id="fileImg" accept="image/*" hidden></label>
-      <button id="btnSample">샘플</button>
+  <section class="step" data-step="1">
+    <h2 class="stepHead">① 그림 열기</h2>
+    <div class="stepBody">
+      <label class="btn big" title="AI가 만든 스프라이트 줄(PNG)을 엽니다. 창에 끌어다 놓아도 됩니다.">PNG 열기<input type="file" id="fileImg" accept="image/*" hidden></label>
+      <button id="btnSample" class="wide" title="연습용 샘플 그림을 만들어 엽니다">샘플로 연습하기</button>
+      <p class="hint">열면 ② 자동 정리가 바로 실행됩니다.</p>
     </div>
-    <div class="row">
-      <label class="btn">프로젝트 열기<input type="file" id="fileProj" accept=".json,application/json" hidden></label>
-      <button id="btnSaveProj">프로젝트 저장</button>
+  </section>
+
+  <section class="step" data-step="2">
+    <h2 class="stepHead">② 자동 정리</h2>
+    <div class="stepBody">
+      <button id="btnAuto" class="big" title="배경 제거 + 프레임 찾기 + AI 픽셀 크기 맞추기를 기본값으로 한 번에">✨ 자동 정리</button>
+      <label class="chk" title="원본 창에 배경을 지운 결과를 보여 줍니다"><input id="showKeyed" type="checkbox" checked> 원본 창에 배경 지운 모습 보기</label>
+      <details>
+        <summary>고급 설정</summary>
+        <h3>배경</h3>
+        <div class="row"><label title="지울 배경 색. 보통 자동으로 잡힙니다">배경 색</label><input id="keyColor" type="color"><button id="btnPickKey" data-mode="pick" class="sm" title="원본 창에서 배경을 클릭해 색을 고릅니다">스포이트</button></div>
+        <div class="row slider"><label title="배경 색과 이만큼 비슷하면 지웁니다">허용오차</label><input id="tol" type="range" min="10" max="250"><output for="tol"></output></div>
+        <div class="row slider"><label title="그림 가장자리의 섞인 색을 얼마나 더 지울지">가장자리</label><input id="edge" type="range" min="0" max="200"><output for="edge"></output></div>
+        <div class="row slider"><label title="가장자리에 남은 초록 기운(디스필)을 지웁니다">초록 테두리 지우기</label><input id="despill" type="range" min="0" max="1" step="0.1"><output for="despill"></output></div>
+        <h3>프레임</h3>
+        <div class="row slider"><label title="몸체로 볼 최소 크기(가장 큰 덩어리 대비). 낮추면 작은 그림도 프레임이 됩니다">프레임 찾기 민감도</label><input id="bodyFrac" type="range" min="0.05" max="0.8" step="0.05"><output for="bodyFrac"></output></div>
+        <button id="btnDetect" class="sm wide" title="박스를 지우고 프레임만 다시 찾습니다">프레임만 다시 찾기</button>
+        <h3>픽셀</h3>
+        <div class="row"><label title="AI 그림에서 픽셀 한 칸이 원본 몇 px인지 (가짜 픽셀 크기)">AI 픽셀 크기</label><input id="pixel" type="number" min="1" max="20" step="0.01"><button id="btnPixel" class="sm" title="다시 자동 감지">자동</button></div>
+        <div class="row chips" id="pixelCands" title="다른 후보. 눌러서 바로 비교"></div>
+        <div class="row"><label title="팔레트 색 수. 0이면 색 정리를 끕니다">색 수</label><input id="colors" type="number" min="0" max="256" step="1"></div>
+        <label class="chk" title="모든 프레임이 같은 팔레트를 쓰게 해 프레임마다 색이 깜빡이는 것을 막습니다"><input id="sharedPalette" type="checkbox"> 팔레트 통일 (모든 프레임)</label>
+        <label class="chk" title="주변에 붙은 픽셀이 거의 없는 가장자리 1px 점을 지웁니다"><input id="lone" type="checkbox"> 외톨이 픽셀 정리</label>
+        <div class="row"><label class="chk" title="몸 바깥 둘레 1px을 한 색으로 다시 그립니다"><input id="outline" type="checkbox"> 1px 외곽선 다시 그리기</label><input id="outlineColor" type="color" title="외곽선 색 (켤 때 가장 어두운 색으로 자동 설정)"></div>
+        <h3>프레임 크기</h3>
+        <div class="row"><label title="내보낼 한 칸의 크기 (셀)">프레임 크기</label><input id="cellW" type="number" min="1" max="1024"><span>×</span><input id="cellH" type="number" min="1" max="1024"></div>
+        <div class="row"><label title="그림 둘레 빈칸">여백</label><input id="pad" type="number" min="0" max="64"><button id="btnAutoCell" class="sm" title="가장 큰 프레임에 맞춰 칸 크기와 가이드를 다시 잡습니다">크기 자동</button></div>
+      </details>
     </div>
-    <div class="row"><span>이름</span><input id="name" type="text" value="sprite"></div>
   </section>
 
-  <section>
-    <h2>2. 배경 제거</h2>
-    <div class="row"><span>키 색</span><input id="keyColor" type="color"><button id="btnPickKey" data-mode="pick">스포이트</button></div>
-    <div class="row"><span>허용오차</span><input id="tol" type="range" min="10" max="250"><output for="tol"></output></div>
-    <div class="row"><span>가장자리</span><input id="edge" type="range" min="0" max="200"><output for="edge"></output></div>
-    <div class="row"><span>디스필</span><input id="despill" type="range" min="0" max="1" step="0.1"><output for="despill"></output></div>
-    <label class="chk"><input id="showKeyed" type="checkbox" checked> 원본 창에 배경 제거 결과 보기</label>
-  </section>
-
-  <section>
-    <h2>3. 프레임</h2>
-    <div class="row"><span>몸체 기준</span><input id="bodyFrac" type="range" min="0.05" max="0.8" step="0.05"><output for="bodyFrac"></output></div>
-    <div class="row"><button id="btnDetect">자동 감지</button></div>
-    <div class="row modes">
-      <button data-mode="select">선택</button><button data-mode="add">박스 추가</button><button data-mode="split">분할</button>
+  <section class="step" data-step="3">
+    <h2 class="stepHead">③ 프레임 맞추기</h2>
+    <div class="stepBody">
+      <div class="iconrow" title="원본 창의 프레임 박스 다루기">
+        <button data-mode="select" title="선택: 박스 클릭 (Shift = 여러 개)">↖</button>
+        <button data-mode="add" title="박스 추가: 원본에서 드래그">＋</button>
+        <button data-mode="split" title="분할: 자를 위치를 클릭">✂</button>
+        <button id="btnMerge" title="병합: 고른 박스를 하나로">⧉</button>
+        <button id="btnDelete" title="삭제: 고른 박스(프레임) 지우기">🗑</button>
+      </div>
+      <button id="btnAutoPlace" class="big" title="프레임마다 발 위치와 몸 중심을 찾아 가이드에 맞춥니다. 그다음 손으로 다듬으세요">자동 정렬 (발·몸 중심)</button>
+      <p class="hint">편집 창에서 드래그·방향키로 다듬고, 선을 끌어 가이드를 옮깁니다. 필름의 ⧉ ◀ ▶ ✕ 로 복제·순서·삭제.</p>
+      <details>
+        <summary>이펙트 지우기</summary>
+        <div class="row"><label title="아래 도구를 어느 프레임에 쓸지">적용 범위</label><select id="scope"><option value="cur">현재 프레임</option><option value="all">모든 프레임</option></select></div>
+        <label class="chk" title="지운 픽셀을 버리지 않고 FX 레이어로 옮겨 따로 내보냅니다"><input id="toFx" type="checkbox"> 지운 픽셀을 FX 레이어로 옮기기</label>
+        <div class="row slider"><label title="요술봉: 이만큼 비슷한 색까지 함께 고릅니다">요술봉 허용오차</label><input id="wandTol" type="range" min="0" max="160"><output for="wandTol"></output></div>
+        <p class="hint">편집 창 위 🪄 요술봉 · ▭ 사각형 · ➰ 올가미로 고른 뒤 <b>선택 지우기</b> (Delete).</p>
+        <div class="row"><button id="btnDelSel" class="sm">선택 지우기</button><button id="btnClearSel" class="sm">선택 해제</button></div>
+        <h3>떨어진 조각</h3>
+        <div class="row slider"><label title="몸에 붙지 않은 조각 중 이 크기(px) 미만만 지웁니다. 맨 오른쪽 = 크기 상관없이 모두">크기 기준</label><input id="islandMax" type="range" min="1" max="2000"><output for="islandMax"></output></div>
+        <div class="row"><button id="btnIslandsPreview" class="sm" title="지울 조각을 분홍색으로 표시">미리보기</button><button id="btnIslands" class="sm" title="표시된 조각을 지웁니다">적용</button></div>
+      </details>
     </div>
-    <div class="row"><button id="btnMerge">병합</button><button id="btnDelete">삭제</button></div>
-    <p class="hint">원본 창: 선택=클릭(Shift 다중) · 추가=드래그 · 분할=자를 x 위치 클릭</p>
   </section>
 
-  <section>
-    <h2>4. 픽셀</h2>
-    <div class="row"><span>가짜 픽셀 크기</span><input id="pixel" type="number" min="1" max="20" step="0.01"><button id="btnPixel">자동</button></div>
-    <div class="row" id="pixelCands"></div>
-    <div class="row"><span>색 수</span><input id="colors" type="number" min="0" max="256" step="1"><small>0=끄기</small></div>
-    <label class="chk"><input id="lone" type="checkbox"> 외톨이 가장자리 픽셀 정리 (1px)</label>
+  <section class="step" data-step="4">
+    <h2 class="stepHead">④ 재생·확인</h2>
+    <div class="stepBody">
+      <div class="row"><button id="btnPlay" class="big half">▶ 재생</button><label class="chk"><input id="loop" type="checkbox"> 반복</label></div>
+      <p class="hint">프레임 시간(ms)은 아래 필름의 숫자 칸. 임팩트 프레임은 필름의 ☆ 클릭.</p>
+      <div class="row"><span id="impactInfo" class="dim"></span></div>
+      <div class="row"><button id="btnClearImpactPt" class="sm" title="편집 창 위 ◎ 도구로 찍은 임팩트 지점을 지웁니다">임팩트 지점 지우기</button></div>
+      <label class="chk" title="미리보기를 왼쪽을 보는 방향으로"><input id="flipView" type="checkbox"> 왼쪽 보기 (좌우 반전)</label>
+      <label class="chk" title="게임 칸 크기와 배경 위에서 실제 크기로 봅니다"><input id="gameView" type="checkbox"> 게임 크기로 보기</label>
+      <div class="row"><label title="게임의 한 칸 크기(px)">게임 칸</label><input id="tile" type="number" min="8" max="512"><label title="게임에서 스프라이트를 몇 배로 그리는지">게임 배율</label><input id="gameScale" type="number" min="0.25" max="8" step="0.25"></div>
+      <div class="row"><label class="btn sm" title="게임 배경 그림 (이 브라우저 안에서만 사용)">배경 그림<input type="file" id="fileBg" accept="image/*" hidden></label><button id="btnClearBg" class="sm">배경 지우기</button></div>
+    </div>
   </section>
 
-  <section>
-    <h2>5. 셀 · 가이드</h2>
-    <div class="row"><span>셀</span><input id="cellW" type="number" min="1" max="1024"> × <input id="cellH" type="number" min="1" max="1024"></div>
-    <div class="row"><span>여백</span><input id="pad" type="number" min="0" max="64"><button id="btnAutoCell">셀 자동</button></div>
-    <div class="row"><button id="btnAutoPlace">전체 가이드에 맞춤</button></div>
-    <label class="chk"><input id="snap" type="checkbox"> 가이드에 스냅 (3px)</label>
-    <label class="chk"><input id="onion" type="checkbox"> 어니언 스킨 (이전/다음)</label>
-    <label class="chk"><input id="grid" type="checkbox"> 픽셀 격자</label>
-    <div class="row"><span>편집 확대</span><input id="zoom" type="range" min="1" max="16"><output for="zoom"></output></div>
-    <p class="hint">편집 창: 드래그=이동 · 방향키 1px · Shift 5px · 선 드래그=가이드 이동 · , . = 이전/다음 프레임</p>
+  <section class="step" data-step="5">
+    <h2 class="stepHead">⑤ 내보내기</h2>
+    <div class="stepBody">
+      <button id="btnAll" class="big primary" title="시트 PNG + 메타 JSON + GIF (+ 왼쪽 버전, FX 시트)">모두 내보내기</button>
+      <div class="row even"><button id="btnSheet" class="sm">시트 PNG</button><button id="btnMeta" class="sm">메타 JSON</button><button id="btnGif" class="sm">GIF</button></div>
+      <label class="chk" title="좌우 반전한 시트도 _left.png 로 함께 내보냅니다"><input id="exportLeft" type="checkbox"> 왼쪽 버전도 내보내기</label>
+      <p class="hint">FX 레이어에 픽셀이 있으면 _fx.png 시트도 함께 나갑니다.</p>
+      <details>
+        <summary>GIF 옵션</summary>
+        <div class="row"><label>배율</label><input id="gifScale" type="number" min="1" max="16"></div>
+        <div class="row"><label>배경</label><input id="gifBg" type="color"><label class="chk"><input id="gifTransparent" type="checkbox"> 투명</label></div>
+      </details>
+      <details>
+        <summary>여러 파일 일괄 처리</summary>
+        <p class="hint">지금 설정 그대로 PNG 여러 개를 정리해 각각 모두 내보냅니다. 끝나면 지금 작업으로 돌아옵니다.</p>
+        <label class="chk" title="끄면 지금 AI 픽셀 크기를 모든 파일에 씁니다"><input id="batchAutoPixel" type="checkbox"> AI 픽셀 크기는 파일마다 자동</label>
+        <label class="btn sm wide">PNG 여러 개 고르기<input type="file" id="fileBatch" accept="image/*" multiple hidden></label>
+      </details>
+    </div>
   </section>
-
-  <section>
-    <h2>6. 재생 · 내보내기</h2>
-    <div class="row"><span>임팩트 프레임</span><input id="impact" type="number" min="0" step="1"></div>
-    <div class="row"><span>GIF 배율</span><input id="gifScale" type="number" min="1" max="16"></div>
-    <div class="row"><span>GIF 배경</span><input id="gifBg" type="color"><label class="chk"><input id="gifTransparent" type="checkbox"> 투명</label></div>
-    <div class="row"><button id="btnSheet">시트 PNG</button><button id="btnMeta">메타 JSON</button><button id="btnGif">GIF</button></div>
-    <div class="row"><button id="btnAll" class="primary">모두 내보내기</button></div>
-  </section>
-  <p id="status">PNG를 열거나 샘플을 누르세요.</p>
 </aside>
 
 <main>
   <section id="srcPane">
-    <div class="bar">원본 <span id="srcInfo"></span></div>
+    <div class="bar">원본 <span id="srcInfo" class="dim"></span></div>
     <div id="srcWrap" class="wrap"><canvas id="src"></canvas></div>
   </section>
   <section id="workPane">
     <div class="panel">
-      <div class="bar">편집 <span id="frameInfo"></span></div>
+      <div class="bar toolbar">
+        <span class="tools">
+          <button data-tool="move" title="이동 (V): 프레임·가이드 드래그">✥</button>
+          <button data-tool="pencil" title="연필 (B): 1px">✏</button>
+          <button data-tool="eraser" title="지우개 (E): 1px">⌫</button>
+          <button data-tool="picker" title="스포이트 (I): 색 고르기">💧</button>
+          <button data-tool="wand" title="요술봉 (W): 비슷한 색 이어진 곳 선택 (Shift = 더하기)">🪄</button>
+          <button data-tool="rect" title="사각형 선택 (M) (Shift = 더하기)">▭</button>
+          <button data-tool="lasso" title="올가미 선택 (L) (Shift = 더하기)">➰</button>
+          <button data-tool="impact" title="임팩트 지점 (P): 타격 지점 클릭. 찍은 프레임이 임팩트 프레임이 됩니다">◎</button>
+        </span>
+        <input id="paintColor" type="color" title="연필 색">
+        <button id="btnUndo" title="되돌리기 (Ctrl+Z)">↶</button><button id="btnRedo" title="다시 하기 (Ctrl+Y)">↷</button>
+        <span class="sep"></span>
+        <label class="chk" title="가이드 3px 안이면 붙습니다"><input id="snap" type="checkbox"> 스냅</label>
+        <label class="chk" title="어니언 스킨: 앞뒤 프레임 겹쳐 보기"><input id="onion" type="checkbox"> 앞뒤 겹쳐 보기</label>
+        <label class="chk"><input id="grid" type="checkbox"> 격자</label>
+        <label title="편집 확대">확대</label><input id="zoom" type="range" min="1" max="16"><output for="zoom"></output>
+      </div>
+      <div class="bar sub"><span id="frameInfo" class="dim"></span></div>
       <div class="wrap" id="editorWrap"><canvas id="editor" tabindex="0"></canvas></div>
     </div>
     <div class="col">
-    <div class="panel">
-      <div class="bar">미리보기
-        <button id="btnPlay">▶ 재생</button>
-        <label class="chk"><input id="loop" type="checkbox"> 반복</label>
-        <span>확대</span><input id="pzoom" type="range" min="1" max="10"><output for="pzoom"></output>
+      <div class="panel">
+        <div class="bar">미리보기 <span class="grow"></span><label>확대</label><input id="pzoom" type="range" min="1" max="10"><output for="pzoom"></output></div>
+        <div class="wrap"><canvas id="preview"></canvas></div>
       </div>
-      <div class="wrap"><canvas id="preview"></canvas></div>
-    </div>
-    <div class="panel">
-      <div class="bar">전/후 비교 (8×)</div>
-      <div class="wrap" id="compareWrap"><canvas id="before"></canvas><canvas id="after"></canvas></div>
-    </div>
+      <div class="panel">
+        <div class="bar">전/후 비교 (8×)</div>
+        <div class="wrap" id="compareWrap"><canvas id="before"></canvas><canvas id="after"></canvas></div>
+      </div>
     </div>
   </section>
   <section id="strip"></section>
 </main>
+</div>
+
+<footer id="statusbar"><span id="status">PNG를 열거나 샘플을 누르세요.</span></footer>
+
+<dialog id="helpDlg">
+  <h3>단축키</h3>
+  <table>
+    <tr><td>드래그</td><td>프레임 이동 (✥ 이동 도구)</td></tr>
+    <tr><td>방향키 / Shift+방향키</td><td>1px / 5px 이동</td></tr>
+    <tr><td>가이드 선 드래그</td><td>발·머리·무기·중심 선 옮기기</td></tr>
+    <tr><td>, &nbsp; .</td><td>이전 / 다음 프레임</td></tr>
+    <tr><td>Space</td><td>재생 / 정지</td></tr>
+    <tr><td>V B E I W M L P</td><td>이동 · 연필 · 지우개 · 스포이트 · 요술봉 · 사각형 · 올가미 · 임팩트 지점</td></tr>
+    <tr><td>Delete / Esc</td><td>선택 지우기 / 선택 해제</td></tr>
+    <tr><td>Ctrl+Z / Ctrl+Y</td><td>되돌리기 / 다시 하기</td></tr>
+    <tr><td>원본 창</td><td>선택=클릭(Shift 여러 개) · 추가=드래그 · 분할=자를 곳 클릭</td></tr>
+    <tr><td>파일 끌어다 놓기</td><td>PNG 또는 프로젝트 .json 열기</td></tr>
+  </table>
+  <form method="dialog"><button>닫기</button></form>
+</dialog>
 
 <script src="js/imageops.js"></script>
 <script src="js/gif.js"></script>

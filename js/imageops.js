@@ -324,6 +324,88 @@ const IO = (() => {
     return boxes.map(b => [0, 1, 2].map(c => Math.round(b.reduce((s, px) => s + px[c], 0) / b.length)));
   }
 
+  // ---------- pixel maps ----------
+  // Edited frames are kept as Map(key → [r,g,b,a]) in frame-local coordinates (may be negative or beyond the
+  // processed image, so pencil strokes can grow the sprite). key = K(x, y); neighbours are k±1 and k±4096.
+  const K = (x, y) => ((y + 2048) << 12) | (x + 2048);
+  const KX = k => (k & 4095) - 2048, KY = k => (k >> 12) - 2048;
+
+  /** Opaque pixels of an image, offset by (x0, y0). */
+  function mapFromImg(img, x0 = 0, y0 = 0) {
+    const m = new Map();
+    for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
+      const i = (y * img.w + x) * 4;
+      if (img.data[i + 3]) m.set(K(x + x0, y + y0), [img.data[i], img.data[i + 1], img.data[i + 2], 255]);
+    }
+    return m;
+  }
+
+  /** Map → trimmed image plus the local position of its top-left pixel. null if empty. */
+  function imgFromMap(m) {
+    if (!m.size) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const k of m.keys()) { const x = KX(k), y = KY(k); if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const w = x1 - x0 + 1, h = y1 - y0 + 1, data = new Uint8ClampedArray(w * h * 4);
+    for (const [k, c] of m) data.set([c[0], c[1], c[2], 255], ((KY(k) - y0) * w + KX(k) - x0) * 4);
+    return { img: { w, h, data }, x0, y0 };
+  }
+
+  /** Connected groups (8-neighbour) of the keys in a map, biggest first. Each group is an array of keys. */
+  function groups(m) {
+    const seen = new Set(), out = [];
+    for (const s of m.keys()) {
+      if (seen.has(s)) continue;
+      const g = [s];
+      seen.add(s);
+      for (let i = 0; i < g.length; i++) {
+        const k = g[i];
+        for (const d of [-4097, -4096, -4095, -1, 1, 4095, 4096, 4097]) {
+          const q = k + d;
+          if (m.has(q) && !seen.has(q)) { seen.add(q); g.push(q); }
+        }
+      }
+      out.push(g);
+    }
+    return out.sort((a, b) => b.length - a.length);
+  }
+
+  /** Recolour the outer ring (pixels with a transparent 4-neighbour) of the main body to one colour. In place. */
+  function outlineRing(m, col) {
+    const body = groups(m)[0];
+    if (!body) return;
+    const ring = body.filter(k => !m.has(k - 1) || !m.has(k + 1) || !m.has(k - 4096) || !m.has(k + 4096));
+    for (const k of ring) m.set(k, [col[0], col[1], col[2], 255]);
+  }
+
+  /**
+   * Alignment anchor of a sprite image: feet = bottom row of the main body (largest connected part, so slash
+   * effects and loose bits are ignored); body centre = median x of the body pixels in its lowest 30% (legs / hips,
+   * steadier than a sword-swinging torso or flying hair). Returns {bx, by} in image pixels (pixel boundaries).
+   */
+  function bodyAnchor(img) {
+    const body = groups(mapFromImg(img))[0];
+    if (!body) return { bx: img.w / 2, by: img.h };
+    let y0 = Infinity, y1 = -Infinity;
+    for (const k of body) { const y = KY(k); if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const cut = y1 - (y1 - y0) * 0.3;
+    const xs = body.filter(k => KY(k) >= cut).map(KX).sort((a, b) => a - b);
+    return { bx: xs[xs.length >> 1] + 0.5, by: y1 + 1 };
+  }
+
+  /** Magic wand: keys connected (4-neighbour) to `start` whose colour is within tol (RGB distance) of it. */
+  function wand(m, start, tol) {
+    const c0 = m.get(start);
+    if (!c0) return [];
+    const near = c => Math.hypot(c[0] - c0[0], c[1] - c0[1], c[2] - c0[2]) <= tol;
+    const seen = new Set([start]), out = [start];
+    for (let i = 0; i < out.length; i++) for (const d of [-1, 1, -4096, 4096]) {
+      const q = out[i] + d, c = m.get(q);
+      if (c && !seen.has(q) && near(c)) { seen.add(q); out.push(q); }
+    }
+    return out;
+  }
+
   return { guessKey, keyMask, despill, components, detectFrames, detectPixelSize, downscale, trim,
-           removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank };
+           removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
+           K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, wand };
 })();
