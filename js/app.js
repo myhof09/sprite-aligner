@@ -27,8 +27,15 @@
     scope: 'cur', toFx: false, wandTol: 40, islandMax: 2000,
     gifScale: 4, gifBg: '#3a3e46', gifTransparent: false, exportLeft: false, batchAutoPixel: true,
     paintColor: '#ffffff',
-    frames: [],   // { box:{x,y,w,h}, raw, dur, ox, oy, edits:Map, fx:Map } + derived pre, base, img, x0, y0, canvas, anchor, fxImg…
+    perFramePixel: false, head: null,   // head: { x, y, w, h (source px), frame } reference for size matching
+    compareMode: 'before',
+    effects: [],  // effect instances, see addEffect()
+    showEffects: true, effectsMode: 'separate',
+    frames: [],   // { box:{x,y,w,h}, raw, dur, ox, oy, edits:Map, fx:Map, pixel } + derived pre, base, img, x0, y0, canvas, anchor, fxImg, autoPixel, head…
   };
+  const assets = new Map();   // effect assets: id → { name, frames:[canvas], durations, spec?, url? }
+  let fxSel = null;           // selected effect instance id
+  let nextId = 1;
   let src = null, srcCanvas = null;          // original image + canvas
   let keyed = null, mask = null, keyedCanvas = null;
   let labels = null, comps = [];             // connected regions of the mask
@@ -109,9 +116,11 @@
     boxSel.clear(); selection.clear(); cur = 0;
     undoStack.length = redoStack.length = 0;
     if (autoPixel) detectPixel();
+    if (S.perFramePixel) detectFramePixels();
     S.frames.forEach(prepFrame);
     applyPalettes();
     autoCell();
+    if (S.head) compareHeads();
     render();
   }
 
@@ -133,9 +142,20 @@
     return p => ok.has(labels[p]);
   }
 
+  /** Per-frame AI pixel size, searched only within ±20% of the global one (so it cannot jump to a harmonic). */
+  function detectFramePixels() {
+    for (const f of S.frames) {
+      const c = IO.detectPixelSize(keyed, mask, [f.box], S.pixel * 0.8, S.pixel * 1.2);
+      f.autoPixel = c.length ? c[0].p : null;
+    }
+  }
+
+  /** AI pixel size used for a frame: manual override → per-frame auto (if on) → global. */
+  const pixelOf = f => f.pixel || (S.perFramePixel && f.autoPixel) || S.pixel;
+
   /** Downscale + lone-pixel cleanup (no palette yet). */
   function prepFrame(f) {
-    f.pre = IO.downscale(keyed, ownerTest(f), f.box, S.pixel);
+    f.pre = IO.downscale(keyed, ownerTest(f), f.box, pixelOf(f));
     if (S.lone) IO.removeLonePixels(f.pre);
   }
 
@@ -148,7 +168,7 @@
     const shared = S.colors > 0 && S.sharedPalette ? IO.dominantPalette(S.frames.map(f => f.pre), S.colors) : null;
     let lost = 0;
     for (const f of S.frames) {
-      const base = { w: f.pre.w, h: f.pre.h, data: new Uint8ClampedArray(f.pre.data) };
+      const base = { ...f.pre, data: new Uint8ClampedArray(f.pre.data) };
       if (S.colors > 0) IO.snapToPalette(base, shared || IO.dominantPalette([f.pre], S.colors));
       if (f.base && (f.base.w !== base.w || f.base.h !== base.h)) {
         if (f.edits.size || f.fx.size) lost++;
@@ -233,16 +253,245 @@
     if (Math.abs(left + f.anchor.bx - g.cx) <= t) f.ox = Math.round(g.cx - f.anchor.bx) - f.x0;
   }
 
-  // ---------- undo / redo (positions, edits, FX, frame list, impact) ----------
+  // ---------- size matching by head (A) ----------
+  // The user boxes one head in the source. Every frame is searched for that head at 0.8–1.2× (template match on
+  // the keyed source). head.s > 1 means the AI drew that frame bigger, so its AI pixel must be s× bigger too.
+
+  function compareHeads() {
+    const h = S.head;
+    if (h) h.frame = boxAt(h.x + h.w / 2, h.y + h.h / 2);
+    if (!h || !S.frames[h.frame]) return;
+    status('머리 찾는 중…');
+    S.frames.forEach((f, i) => {
+      f.head = i === h.frame ? { s: 1, x: h.x, y: h.y, w: h.w, h: h.h } : IO.matchHead(keyed, mask, h, f.box);
+    });
+    status('머리 비교 완료. 5% 넘게 다른 프레임은 ⚠ 표시.');
+  }
+
+  /** Head height in true pixels after downscaling, relative to the reference frame (1 = same). */
+  function headRatio(f) {
+    const ref = S.frames[S.head.frame];
+    return (f.head.h / pixelOf(f)) / (S.head.h / pixelOf(ref));
+  }
+
+  function fitHeads() {
+    if (!S.head || !S.frames.some(f => f.head)) { status('먼저 원본에서 머리 상자를 그리세요.'); return; }
+    const refP = pixelOf(S.frames[S.head.frame]);
+    S.frames.forEach((f, i) => { if (f.head && i !== S.head.frame) f.pixel = +(refP * f.head.s).toFixed(2); });
+    reprocess(false);
+  }
+
+  function buildHeadList() {
+    const el = $('headList');
+    el.innerHTML = '';
+    if (!S.head || !S.frames.some(f => f.head)) { el.textContent = '머리 상자가 없습니다.'; return; }
+    S.frames.forEach((f, i) => {
+      if (!f.head) return;
+      const r = headRatio(f), bad = Math.abs(r - 1) > 0.05;
+      const row = document.createElement('div');
+      row.className = 'headrow' + (bad ? ' bad' : '') + (i === cur ? ' cur' : '');
+      row.textContent = `#${i}${i === S.head.frame ? ' (기준)' : ''}  원본 ${Math.round(f.head.s * 100)}% → 결과 ${Math.round(r * 100)}%${bad ? ' ⚠' : ''}  · ${pixelOf(f)}px`;
+      row.onclick = () => select(i);
+      el.append(row);
+    });
+  }
+
+  // ---------- effects (B) ----------
+  // An instance places one asset on the character: frames start…start+len-1 show asset frames stretched over that
+  // range; position (x, y) is the asset frame's centre in cell pixels, or per-frame keyframes when `follow` is on.
+
+  function addAsset(a) { const id = 'a' + nextId++; assets.set(id, { ...a, version: 1 }); return id; }
+
+  function addEffect(assetId, extra = {}) {
+    const a = assets.get(assetId), n = S.frames.length;
+    const start = Math.min(cur, Math.max(0, n - 1));
+    const p = S.impactPoint || { x: S.guides.cx, y: Math.round(S.cellH / 2) };
+    const inst = { id: 'e' + nextId++, asset: assetId, name: a.name, start, len: Math.max(1, Math.min(a.frames.length, n - start)),
+      x: p.x, y: p.y, scale: 1, rot: 0, flip: false, blend: 'source-over', opacity: 1, follow: false, keys: {}, ...extra };
+    pushUndo();
+    S.effects.push(inst);
+    fxSel = inst.id;
+    render();
+    return inst;
+  }
+
+  function addBuiltin() {
+    const type = $('fxType').value, color = $('fxColor').value, size = +$('fxSize').value || 10;
+    const id = addAsset({ ...FX.builtin(type, color, size), spec: { type, color, size } });
+    const extra = type === 'dust' ? { x: S.guides.cx, y: S.guides.base - Math.round(size * 0.5) } : {};
+    if (type === 'slash' || type === 'spark') extra.blend = 'lighter';
+    addEffect(id, extra);
+  }
+
+  /** The FX layer (removed effect pixels) of every frame becomes one effect, so it can be re-placed / re-blended. */
+  function fxLayerAsEffect() {
+    if (!S.frames.some(f => f.fxCanvas)) { status('FX 레이어가 비어 있습니다. ③ 이펙트 지우기에서 FX로 옮기세요.'); return; }
+    const frames = S.frames.map((_, i) => cellCanvas(i, { main: false, effects: false }));
+    const id = addAsset({ name: 'FX 레이어', frames, durations: null });
+    addEffect(id, { start: 0, len: S.frames.length, x: S.cellW / 2, y: S.cellH / 2 });
+  }
+
+  async function importEffects(files) {
+    const pngs = files.filter(f => !f.name.endsWith('.json')), jsons = files.filter(f => f.name.endsWith('.json'));
+    for (const file of pngs) {
+      const stem = baseName(file).replace(/_preview$/, '');
+      const mf = jsons.find(j => baseName(j) === stem) || (jsons.length === 1 && pngs.length === 1 ? jsons[0] : null);
+      let meta = null;
+      try { meta = mf ? JSON.parse(await mf.text()) : null; } catch { status(`${mf.name}: JSON을 읽을 수 없어 한 장짜리로 엽니다.`); }
+      const url = await readURL(file), { canvas } = await loadImage(url);
+      // no meta: a row of square frames if the width is a multiple of the height, else one image
+      const count = !meta && canvas.width % canvas.height === 0 ? canvas.width / canvas.height : 1;
+      const a = FX.fromSheet(canvas, meta, stem, count);
+      addEffect(addAsset({ ...a, url, meta, count }));
+    }
+    status(`이펙트 ${pngs.length}개를 가져왔습니다.`);
+  }
+
+  const fxInst = id => S.effects.find(e => e.id === id);
+
+  /** Which asset frame instance e shows on character frame i (-1 = not visible). */
+  function fxFrameAt(e, i) {
+    if (i < e.start || i >= e.start + e.len) return -1;
+    const n = assets.get(e.asset).frames.length;
+    return Math.min(n - 1, Math.floor((i - e.start) * n / e.len));
+  }
+
+  /** Position on frame i: keyframes (linear between them, held outside) when following, else the fixed spot. */
+  function fxPos(e, i) {
+    const ks = Object.keys(e.keys).map(Number).sort((a, b) => a - b);
+    if (!e.follow || !ks.length) return { x: e.x, y: e.y };
+    if (e.keys[i]) return e.keys[i];
+    const prev = ks.filter(k => k < i).pop(), next = ks.find(k => k > i);
+    if (prev === undefined) return e.keys[next];
+    if (next === undefined) return e.keys[prev];
+    const t = (i - prev) / (next - prev), a = e.keys[prev], b = e.keys[next];
+    return { x: Math.round(a.x + (b.x - a.x) * t), y: Math.round(a.y + (b.y - a.y) * t) };
+  }
+
+  const fxCache = new Map();
+  /** Transformed (scaled / rotated / flipped, pixel-exact) asset frame k of instance e. */
+  function fxCanvas(e, k) {
+    const a = assets.get(e.asset), key = `${e.asset}|${a.version}|${k}|${e.scale}|${e.rot}|${e.flip}`;
+    if (!fxCache.has(key)) fxCache.set(key, FX.transform(a.frames[k], e));
+    return fxCache.get(key);
+  }
+
+  /** Top-left (cell px) and canvas of instance e on frame i, or null. */
+  function fxPlaced(e, i) {
+    const k = fxFrameAt(e, i);
+    if (k < 0) return null;
+    const c = fxCanvas(e, k), p = fxPos(e, i);
+    return { c, k, x: Math.round(p.x - c.width / 2), y: Math.round(p.y - c.height / 2) };
+  }
+
+  /** Draw every effect visible on frame i onto g (already in cell coordinates × z). */
+  function drawEffects(g, i, z) {
+    for (const e of S.effects) {
+      const pl = fxPlaced(e, i);
+      if (!pl) continue;
+      g.save();
+      g.globalCompositeOperation = e.blend; g.globalAlpha = e.opacity;
+      g.imageSmoothingEnabled = false;
+      g.drawImage(pl.c, pl.x * z, pl.y * z, pl.c.width * z, pl.c.height * z);
+      g.restore();
+    }
+  }
+
+  /** Blade tip per frame: the bright, grey (steel) pixel farthest from the body centre. */
+  function findBladeTips(e) {
+    let n = 0;
+    for (let i = e.start; i < e.start + e.len && i < S.frames.length; i++) {
+      const f = S.frames[i], d = f.img.data, cx = f.anchor.bx, cy = f.anchor.by * 0.55;
+      let best = null, bd = -1;
+      for (let y = 0; y < f.img.h; y++) for (let x = 0; x < f.img.w; x++) {
+        const j = (y * f.img.w + x) * 4;
+        if (!d[j + 3]) continue;
+        const mx = Math.max(d[j], d[j + 1], d[j + 2]), mn = Math.min(d[j], d[j + 1], d[j + 2]);
+        if ((d[j] + d[j + 1] + d[j + 2]) / 3 < 150 || mx - mn > 45) continue;
+        const dist = (x - cx) ** 2 + (y - cy) ** 2;
+        if (dist > bd) { bd = dist; best = [x, y]; }
+      }
+      if (best) { e.keys[i] = { x: f.ox + f.x0 + best[0], y: f.oy + f.y0 + best[1] }; n++; }
+    }
+    e.follow = true;
+    return n;
+  }
+
+  /** Effect editor in step ④ for the selected instance. */
+  function buildFxList() {
+    const list = $('fxList');
+    list.innerHTML = '';
+    S.effects.forEach(e => {
+      const row = document.createElement('div');
+      row.className = 'fxrow' + (e.id === fxSel ? ' on' : '');
+      const name = document.createElement('span');
+      name.textContent = `${e.name} · #${e.start}–#${e.start + e.len - 1}`;
+      const del = document.createElement('button');
+      del.textContent = '✕'; del.className = 'sm'; del.title = '이 이펙트 삭제';
+      del.onclick = ev => { ev.stopPropagation(); pushUndo(); S.effects = S.effects.filter(x => x !== e); if (fxSel === e.id) fxSel = null; render(); };
+      row.append(name, del);
+      row.onclick = () => { fxSel = e.id; render(); };
+      list.append(row);
+    });
+    const e = fxInst(fxSel);
+    $('fxEdit').hidden = !e;
+    if (!e) return;
+    const a = assets.get(e.asset);
+    $('fxStart').value = e.start; $('fxLen').value = e.len; $('fxScale').value = e.scale;
+    $('fxRot').value = [0, 90, 180, 270].includes(e.rot) && !e.freeRot ? String(e.rot) : 'free';
+    $('fxAngle').value = e.rot; $('fxAngleRow').hidden = $('fxRot').value !== 'free';
+    document.querySelector('output[for=fxAngle]').textContent = e.rot + '°';
+    $('fxFlip').checked = e.flip; $('fxBlend').value = e.blend; $('fxOpacity').value = e.opacity;
+    document.querySelector('output[for=fxOpacity]').textContent = Math.round(e.opacity * 100) + '%';
+    $('fxFollow').checked = e.follow;
+    $('fxBuiltinRow').hidden = !a.spec;
+    if (a.spec) { $('fxBColor').value = a.spec.color; $('fxBSize').value = a.spec.size; }
+    const p = fxPos(e, cur);
+    $('fxInfo').textContent = `프레임 ${a.frames.length}장 · 위치 (${p.x}, ${p.y})` + (e.follow ? ` · 키프레임 ${Object.keys(e.keys).length}개` : '');
+  }
+
+  function bindEffects() {
+    const edit = fn => () => { const e = fxInst(fxSel); if (!e) return; pushUndo(); fn(e); render(); };
+    $('btnFxAdd').onclick = addBuiltin;
+    $('btnFxLayer').onclick = fxLayerAsEffect;
+    $('fileFx').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) importEffects(files); };
+    $('fxStart').onchange = edit(e => { e.start = Math.max(0, Math.min(S.frames.length - 1, Math.round(+$('fxStart').value))); });
+    $('fxLen').onchange = edit(e => { e.len = Math.max(1, Math.round(+$('fxLen').value)); });
+    $('fxScale').onchange = edit(e => { e.scale = Math.max(1, Math.min(8, Math.round(+$('fxScale').value))); });
+    $('fxRot').onchange = edit(e => { e.freeRot = $('fxRot').value === 'free'; if (!e.freeRot) e.rot = +$('fxRot').value; });
+    $('fxAngle').oninput = () => { document.querySelector('output[for=fxAngle]').textContent = $('fxAngle').value + '°'; };
+    $('fxAngle').onchange = edit(e => { e.rot = +$('fxAngle').value; e.freeRot = true; });
+    $('fxFlip').onchange = edit(e => { e.flip = $('fxFlip').checked; });
+    $('fxBlend').onchange = edit(e => { e.blend = $('fxBlend').value; });
+    $('fxOpacity').oninput = () => { document.querySelector('output[for=fxOpacity]').textContent = Math.round($('fxOpacity').value * 100) + '%'; };
+    $('fxOpacity').onchange = edit(e => { e.opacity = +$('fxOpacity').value; });
+    $('fxFollow').onchange = edit(e => { e.follow = $('fxFollow').checked; });
+    const rebuild = edit(e => {
+      const a = assets.get(e.asset);
+      a.spec = { ...a.spec, color: $('fxBColor').value, size: +$('fxBSize').value || a.spec.size };
+      Object.assign(a, FX.builtin(a.spec.type, a.spec.color, a.spec.size), { version: a.version + 1 });
+    });
+    $('fxBColor').onchange = rebuild; $('fxBSize').onchange = rebuild;
+    $('btnFxImpact').onclick = edit(e => {
+      if (!S.impactPoint) { status('먼저 ◎ 도구로 임팩트 지점을 찍으세요.'); return; }
+      if (e.follow) e.keys[S.impact] = { ...S.impactPoint }; else { e.x = S.impactPoint.x; e.y = S.impactPoint.y; }
+      e.start = Math.min(e.start, S.impact);
+    });
+    $('btnFxTip').onclick = edit(e => { status(`칼끝을 ${findBladeTips(e)}개 프레임에서 찾았습니다. 틀린 곳은 ✦ 도구로 끌어 고치세요.`); });
+    $('btnFxKeysClear').onclick = edit(e => { e.keys = {}; });
+  }
+
+  // ---------- undo / redo (positions, edits, FX, frame list, impact, effects) ----------
   const undoStack = [], redoStack = [];
   const snapshot = () => ({
     frames: S.frames.map(f => ({ f, ox: f.ox, oy: f.oy, edits: new Map(f.edits), fx: new Map(f.fx) })),
-    impact: S.impact, impactPoint: S.impactPoint, cur,
+    impact: S.impact, impactPoint: S.impactPoint, cur, effects: JSON.parse(JSON.stringify(S.effects)),
   });
   function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; }
   function restore(s) {
     S.frames = s.frames.map(e => { Object.assign(e.f, { ox: e.ox, oy: e.oy, edits: new Map(e.edits), fx: new Map(e.fx) }); compose(e.f); return e.f; });
-    S.impact = s.impact; S.impactPoint = s.impactPoint; cur = s.cur;
+    S.impact = s.impact; S.impactPoint = s.impactPoint; cur = s.cur; S.effects = s.effects;
+    if (!fxInst(fxSel)) fxSel = null;
     selection.clear(); render();
   }
   function undo() { if (undoStack.length) { redoStack.push(snapshot()); restore(undoStack.pop()); } }
@@ -301,6 +550,7 @@
     const n = S.frames.length, f = S.frames[i];
     if (onion && n > 1) { blitFrame(g, S.frames[(i - 1 + n) % n], z, 0.25); if (n > 2) blitFrame(g, S.frames[(i + 1) % n], z, 0.25); }
     blitFrame(g, f, z);
+    if (fx && S.showEffects && f) drawEffects(g, i, z);
     if (fx && f && f.fxCanvas) { g.globalAlpha = 0.45; g.drawImage(f.fxCanvas, (f.ox + f.fx0) * z, (f.oy + f.fy0) * z, f.fxCanvas.width * z, f.fxCanvas.height * z); g.globalAlpha = 1; }
     if (sel && f && selection.has(f)) {
       g.fillStyle = 'rgba(255,60,200,0.6)';
@@ -312,15 +562,21 @@
     return g;
   }
 
-  /** Frame i composited into one cell (with FX), optionally mirrored: used by preview and export. */
-  function cellCanvas(i, { flip = false, fx = true, main = true } = {}) {
+  /** Frame i composited into one cell: character (main), FX layer, placed effects (with their blend modes);
+   *  optionally mirrored for the left-facing version. Used by preview and export. */
+  function cellCanvas(i, { flip = false, fx = true, main = true, effects = true } = {}) {
     const c = document.createElement('canvas');
     c.width = S.cellW; c.height = S.cellH;
     const g = c.getContext('2d'), f = S.frames[i];
-    if (flip) { g.translate(S.cellW, 0); g.scale(-1, 1); }
     if (main) g.drawImage(f.canvas, f.ox + f.x0, f.oy + f.y0);
     if (fx && f.fxCanvas) g.drawImage(f.fxCanvas, f.ox + f.fx0, f.oy + f.fy0);
-    return c;
+    if (effects) drawEffects(g, i, 1);
+    if (!flip) return c;
+    const m = document.createElement('canvas');
+    m.width = S.cellW; m.height = S.cellH;
+    const h = m.getContext('2d');
+    h.translate(S.cellW, 0); h.scale(-1, 1); h.drawImage(c, 0, 0);
+    return m;
   }
 
   let dispScale = 1;
@@ -340,6 +596,14 @@
       g.strokeRect(b.x * s + 0.5, b.y * s + 0.5, b.w * s, b.h * s);
       g.fillStyle = g.strokeStyle; g.fillText('#' + i + (f.raw ? '*' : ''), b.x * s + 2, b.y * s - 3);
     });
+    if (S.head) S.frames.forEach((f, i) => {   // head boxes: reference solid, matches dashed with their scale
+      const h = i === S.head.frame ? S.head : f.head, s = dispScale;
+      if (!h) return;
+      g.strokeStyle = '#ffd45a'; g.lineWidth = 1;
+      if (i !== S.head.frame) g.setLineDash([3, 3]);
+      g.strokeRect(h.x * s + 0.5, h.y * s + 0.5, h.w * s, h.h * s); g.setLineDash([]);
+      g.fillStyle = '#ffd45a'; g.fillText(i === S.head.frame ? '머리 기준' : Math.round(h.s * 100) + '%', h.x * s + 2, (h.y + h.h) * s + 12);
+    });
     if (drag) {
       g.strokeStyle = '#fff'; g.setLineDash([4, 3]);
       g.strokeRect(drag.x0 * dispScale, drag.y0 * dispScale, (drag.x1 - drag.x0) * dispScale, (drag.y1 - drag.y0) * dispScale);
@@ -352,6 +616,12 @@
     if (!S.frames.length) { $('editor').width = 0; $('frameInfo').textContent = ''; return; }
     const g = drawCell($('editor'), S.zoom, cur, { onion: S.onion, grid: S.grid, labels: true, fx: true, sel: true });
     drawImpactPoint(g, S.zoom, cur === S.impact);
+    const se = fxInst(fxSel), pl = se && S.showEffects && fxPlaced(se, cur);
+    if (pl) {   // selected effect: dashed box
+      const z = S.zoom;
+      g.strokeStyle = '#7dffef'; g.setLineDash([3, 3]); g.lineWidth = 1;
+      g.strokeRect(pl.x * z + 0.5, pl.y * z + 0.5, pl.c.width * z, pl.c.height * z); g.setLineDash([]);
+    }
     if (ed && ed.shape) {   // rect / lasso in progress
       const z = S.zoom;
       g.strokeStyle = '#fff'; g.setLineDash([4, 3]); g.lineWidth = 1;
@@ -404,11 +674,32 @@
     g.fillText(`칸 ${T}px · 배율 ${s}`, 4, cv.height - 5);
   }
 
+  /** Reference frame and current frame side by side at the same zoom, head boxes drawn: sizes must match. */
+  function drawRefCompare() {
+    const f = S.frames[cur], ref = S.head ? S.frames[S.head.frame] : S.frames[0], b4 = $('before'), af = $('after');
+    const z = 4;
+    for (const [cv, fr, label] of [[b4, ref, '기준'], [af, f, '현재']]) {
+      cv.width = fr.canvas.width * z; cv.height = fr.canvas.height * z + 14;
+      const g = cv.getContext('2d');
+      g.imageSmoothingEnabled = false;
+      checker(g, cv.width, cv.height, 16);
+      g.drawImage(fr.canvas, 0, 14, cv.width, cv.height - 14);
+      g.fillStyle = '#fff'; g.font = '11px system-ui';
+      g.fillText(`${label} #${S.frames.indexOf(fr)} · ${pixelOf(fr)}px` + (fr.head && S.head ? ` · 머리 ${Math.round(headRatio(fr) * 100)}%` : ''), 2, 11);
+      if (fr.head && fr.base.sx !== undefined) {   // head box mapped from source to true pixels
+        const p = pixelOf(fr), x = (fr.head.x - fr.base.sx) / p - fr.x0, y = (fr.head.y - fr.base.sy) / p - fr.y0;
+        g.strokeStyle = '#ffd45a'; g.setLineDash([4, 3]);
+        g.strokeRect(x * z, 14 + y * z, fr.head.w / p * z, fr.head.h / p * z); g.setLineDash([]);
+      }
+    }
+  }
+
   /** Before (source crop, scaled so one AI pixel ≈ 8 screen px) next to after (true pixels at 8×). */
   function drawCompare() {
     const f = S.frames[cur], b4 = $('before'), af = $('after');
     if (!f || !srcCanvas) return;
-    const s = 8 / S.pixel, b = f.box;
+    if (S.compareMode === 'ref') return drawRefCompare();
+    const s = 8 / pixelOf(f), b = f.box;
     b4.width = Math.round(b.w * s); b4.height = Math.round(b.h * s);
     const g = b4.getContext('2d');
     g.imageSmoothingEnabled = false;
@@ -460,8 +751,15 @@
 
   function render() {
     cur = Math.min(cur, Math.max(0, S.frames.length - 1));
+    if (S.head) {   // the reference frame is whichever box holds the head box (frames may be reordered)
+      S.head.frame = boxAt(S.head.x + S.head.w / 2, S.head.y + S.head.h / 2);
+      if (S.head.frame < 0) S.head = null;
+    }
     S.impact = Math.min(S.impact, Math.max(0, S.frames.length - 1));
-    drawSource(); drawEditor(); drawPreview(); drawCompare(); buildStrip();
+    drawSource(); drawEditor(); drawPreview(); drawCompare(); buildStrip(); buildHeadList(); buildFxList();
+    const f = S.frames[cur];
+    $('framePixel').value = f && f.pixel ? f.pixel : '';
+    $('framePixel').placeholder = f ? String(pixelOf(f)) : '';
   }
 
   function select(i) {
@@ -510,13 +808,14 @@
     'gifScale', 'tile', 'gameScale', 'wandTol', 'islandMax'];
   const INTS = ['cellW', 'cellH', 'zoom', 'pzoom', 'gifScale', 'pad', 'colors', 'tile', 'wandTol', 'islandMax'];
   const CHECKS = ['snap', 'onion', 'grid', 'loop', 'lone', 'sharedPalette', 'outline', 'gifTransparent', 'flipView', 'gameView',
-    'toFx', 'exportLeft', 'batchAutoPixel'];
+    'toFx', 'exportLeft', 'batchAutoPixel', 'perFramePixel', 'showEffects'];
 
   function syncInputs() {
     for (const k of NUM_INPUTS) $(k).value = S[k];
     for (const k of CHECKS) $(k).checked = S[k];
     $('name').value = S.name; $('keyColor').value = rgbToHex(S.key); $('gifBg').value = S.gifBg;
     $('outlineColor').value = S.outlineColor; $('paintColor').value = S.paintColor; $('scope').value = S.scope;
+    $('compareMode').value = S.compareMode; $('effectsMode').value = S.effectsMode;
     document.querySelectorAll('output').forEach(o => { o.textContent = $(o.htmlFor.value).value; });
     $('pixelCands').innerHTML = '';
     pixelCands.forEach(c => {
@@ -545,6 +844,8 @@
       outline: () => { if (S.outline) { S.outlineColor = darkest(); syncInputs(); } recomposeAll(); },
       cellW: render, cellH: render, zoom: drawEditor, pzoom: drawPreview, grid: render, onion: drawEditor,
       flipView: drawPreview, gameView: drawPreview, tile: drawPreview, gameScale: drawPreview,
+      perFramePixel: () => { if (S.perFramePixel && keyed) detectFramePixels(); reprocess(false); },
+      showEffects: drawEditor,
     };
     for (const k of NUM_INPUTS) {
       const el = $(k), live = ['zoom', 'pzoom'].includes(k);
@@ -563,6 +864,18 @@
     $('outlineColor').onchange = () => { S.outlineColor = $('outlineColor').value; if (S.outline) recomposeAll(); };
     $('paintColor').onchange = () => { S.paintColor = $('paintColor').value; };
     $('scope').onchange = () => { S.scope = $('scope').value; };
+    $('compareMode').onchange = () => { S.compareMode = $('compareMode').value; drawCompare(); };
+    $('effectsMode').onchange = () => { S.effectsMode = $('effectsMode').value; };
+    $('framePixel').onchange = () => {
+      const f = S.frames[cur], v = +$('framePixel').value;
+      if (!f) return;
+      f.pixel = v > 0 ? v : null;
+      reprocess(false);
+    };
+    $('btnFramePixelReset').onclick = () => { const f = S.frames[cur]; if (f) { f.pixel = null; reprocess(false); } };
+    $('btnHeadBox').onclick = () => { if (!src) return; setMode('head'); status('원본 창에서 한 프레임의 머리를 드래그로 감싸세요.'); };
+    $('btnHeadCompare').onclick = () => { compareHeads(); render(); };
+    $('btnHeadFit').onclick = fitHeads;
     $('showKeyed').onchange = drawSource;
 
     $('fileImg').onchange = async e => {
@@ -712,7 +1025,7 @@
       } else if (mode === 'split') {
         const i = boxAt(x, y);
         if (i >= 0) splitAt(i, x);
-      } else if (mode === 'add') {
+      } else if (mode === 'add' || mode === 'head') {
         drag = { x0: x, y0: y, x1: x, y1: y };
         cv.setPointerCapture(e.pointerId);
       }
@@ -727,6 +1040,14 @@
       if (!drag) return;
       const b = { x: Math.min(drag.x0, drag.x1), y: Math.min(drag.y0, drag.y1), w: Math.abs(drag.x1 - drag.x0), h: Math.abs(drag.y1 - drag.y0) };
       drag = null;
+      if (mode === 'head') {   // reference head box → match it in every frame
+        const fi = boxAt(b.x + b.w / 2, b.y + b.h / 2);
+        setMode('select');
+        if (fi < 0 || b.w < 6 || b.h < 6) { status('머리 상자는 한 프레임의 머리를 감싸게 그리세요.'); drawSource(); return; }
+        S.head = { ...b, frame: fi };
+        compareHeads(); S.compareMode = 'ref'; syncInputs(); render();
+        return;
+      }
       const t = b.w > 2 && b.h > 2 ? tighten(b) : null;
       if (!t) { drawSource(); return; }
       pushUndo();
@@ -853,6 +1174,16 @@
         ed = { shape: 'rect', x0: p.x, y0: p.y, x1: p.x + 1, y1: p.y + 1, add: e.shiftKey };
       } else if (tool === 'lasso') {
         ed = { shape: 'lasso', pts: [[p.fx, p.fy]], add: e.shiftKey };
+      } else if (tool === 'fx') {
+        // click an effect to select it (topmost first), then drag the selected one
+        const hit = [...S.effects].reverse().find(x => { const pl = fxPlaced(x, cur); return pl && p.x >= pl.x && p.x < pl.x + pl.c.width && p.y >= pl.y && p.y < pl.y + pl.c.height; });
+        if (hit) fxSel = hit.id;
+        const fe = fxInst(fxSel);
+        if (!fe) { status('먼저 ④ 이펙트에서 이펙트를 추가하거나 고르세요.'); return; }
+        pushUndo();
+        const q = fxPos(fe, cur);
+        ed = { fx: fe, mx: e.offsetX, my: e.offsetY, x: q.x, y: q.y };
+        render();
       } else if (tool === 'impact') {
         pushUndo();
         S.impactPoint = { x: p.x, y: p.y };
@@ -872,6 +1203,10 @@
         const lim = ed.guide.v ? S.cellW : S.cellH;
         S.guides[ed.guide.k] = Math.max(0, Math.min(lim, Math.round((ed.guide.v ? e.offsetX : e.offsetY) / z)));
         drawEditor(); thumbs.forEach((_, i) => drawThumb(i));
+      } else if (ed.fx) {
+        const pos = { x: ed.x + Math.round((e.offsetX - ed.mx) / z), y: ed.y + Math.round((e.offsetY - ed.my) / z) };
+        if (ed.fx.follow) ed.fx.keys[cur] = pos; else Object.assign(ed.fx, pos);
+        drawEditor(); drawPreview();
       } else if (ed.paint) {
         // fill the gap between pointer samples so fast strokes stay unbroken
         const lx = p.x - f.ox, ly = p.y - f.oy, n = Math.max(Math.abs(lx - ed.lx), Math.abs(ly - ed.ly));
@@ -901,11 +1236,16 @@
         selectByCell((x, y) => x >= x0 && x < x1 && y >= y0 && y < y1, done.add);
       } else if (done.shape === 'lasso' && done.pts.length > 2) {
         selectByCell((x, y) => pointInPoly(x, y, done.pts), done.add);
+      } else if (done.fx || done.paint) {
+        render(); return;
+      } else if (!done.shape) {
+        if (!done.guide) { drawThumb(cur); buildFxList(); }
+        return;   // move / guide drags already redrew what changed
       }
       render();
     });
 
-    const TOOL_KEYS = { v: 'move', b: 'pencil', e: 'eraser', i: 'picker', w: 'wand', m: 'rect', l: 'lasso', p: 'impact' };
+    const TOOL_KEYS = { v: 'move', b: 'pencil', e: 'eraser', i: 'picker', w: 'wand', m: 'rect', l: 'lasso', p: 'impact', x: 'fx' };
     document.addEventListener('keydown', e => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || $('helpDlg').open) return;
       const k = e.key.toLowerCase();
@@ -976,9 +1316,23 @@
 
   const savePNG = (canvas, name) => new Promise(r => canvas.toBlob(b => { download(b, name); r(); }, 'image/png'));
 
+  const merged = () => S.effectsMode === 'merged';
+
   function exportSheet() {
     if (!S.frames.length) return;
-    return savePNG(sheetCanvas({ fx: false }), `${S.name}.png`);
+    return savePNG(sheetCanvas({ fx: false, effects: merged() }), `${S.name}.png`);
+  }
+
+  /** Separate mode: one sheet per placed effect, holding its transformed frames. */
+  function effectSheets() {
+    return S.effects.map((e, j) => {
+      const n = assets.get(e.asset).frames.length, cs = Array.from({ length: n }, (_, k) => fxCanvas(e, k));
+      const w = Math.max(...cs.map(c => c.width)), h = Math.max(...cs.map(c => c.height));
+      const sheet = document.createElement('canvas');
+      sheet.width = w * n; sheet.height = h;
+      cs.forEach((c, k) => sheet.getContext('2d').drawImage(c, k * w + (w - c.width) / 2, (h - c.height) / 2));
+      return { e, sheet, w, h, n, image: `${S.name}_effect${j + 1}.png` };
+    });
   }
 
   function meta() {
@@ -1003,6 +1357,20 @@
       impactPoint: S.impactPoint && { x: S.cellW - 1 - S.impactPoint.x, y: S.impactPoint.y } };
     if (hasFx()) m.fx = { image: `${S.name}_fx.png`, note: 'removed effect pixels, same cells as the main sheet' };
     if (hasFx() && S.exportLeft) m.fx.left = `${S.name}_fx_left.png`;
+    if (S.effects.length && merged()) m.effectsMerged = true;
+    if (S.effects.length && !merged()) {
+      const BLEND = { 'source-over': 'normal', lighter: 'add', screen: 'screen' };
+      m.effects = effectSheets().map(({ e, w, h, n, image }) => {
+        const frames = [];
+        for (let i = e.start; i < Math.min(S.frames.length, e.start + e.len); i++) {
+          const k = fxFrameAt(e, i), p = fxPos(e, i), x = Math.round(p.x - w / 2), y = Math.round(p.y - h / 2);
+          frames.push({ charFrame: i, effectFrame: k, x, y, leftX: S.cellW - x - w });
+        }
+        return { name: e.name, image, frameWidth: w, frameHeight: h, frameCount: n, blend: BLEND[e.blend], opacity: e.opacity,
+          startFrame: e.start, length: e.len, flip: e.flip, rotation: e.rot, scale: e.scale, frames,
+          note: 'draw effectFrame at (x, y) in the character cell while charFrame is shown; left-facing: flip it and use leftX' };
+      });
+    }
     return m;
   }
 
@@ -1048,12 +1416,21 @@
     await exportSheet();
     exportMeta();
     exportGif();
-    if (S.exportLeft) await savePNG(sheetCanvas({ fx: false, flip: true }), `${S.name}_left.png`);
+    if (S.exportLeft) await savePNG(sheetCanvas({ fx: false, flip: true, effects: merged() }), `${S.name}_left.png`);
     if (hasFx()) {
-      await savePNG(sheetCanvas({ main: false }), `${S.name}_fx.png`);
-      if (S.exportLeft) await savePNG(sheetCanvas({ main: false, flip: true }), `${S.name}_fx_left.png`);
+      await savePNG(sheetCanvas({ main: false, effects: false }), `${S.name}_fx.png`);
+      if (S.exportLeft) await savePNG(sheetCanvas({ main: false, flip: true, effects: false }), `${S.name}_fx_left.png`);
     }
-    status(`내보냄: ${S.name}.png · .json · _preview.gif` + (S.exportLeft ? ' · _left.png' : '') + (hasFx() ? ' · _fx.png' : ''));
+    const sep = S.effects.length && !merged() ? effectSheets() : [];
+    for (const s of sep) await savePNG(s.sheet, s.image);
+    // merged sheets cut effects at the cell edge: say so
+    const clipped = merged() && S.effects.some(e => S.frames.some((_, i) => {
+      const pl = fxPlaced(e, i);
+      return pl && (pl.x < 0 || pl.y < 0 || pl.x + pl.c.width > S.cellW || pl.y + pl.c.height > S.cellH);
+    }));
+    status(`내보냄: ${S.name}.png · .json · _preview.gif` + (S.exportLeft ? ' · _left.png' : '') + (hasFx() ? ' · _fx.png' : '')
+      + (sep.length ? ` · 이펙트 시트 ${sep.length}개` : '') + (S.effects.length && merged() ? ' (이펙트 합침)' : '')
+      + (clipped ? ' ⚠ 이펙트 일부가 칸 밖이라 잘렸습니다: 프레임 크기를 키우거나 따로 시트로 내보내세요.' : ''));
   }
 
   /** Batch: same settings for several PNGs, export each, then come back to the current work. */
@@ -1073,8 +1450,26 @@
   // ---------- project file ----------
   function projectJSON() {
     const { frames, ...settings } = S;
-    return JSON.stringify({ app: 'sprite-aligner', version: 2, ...settings,
-      frames: frames.map(f => ({ box: f.box, raw: f.raw, dur: f.dur, ox: f.ox, oy: f.oy, edits: [...f.edits], fx: [...f.fx] })) });
+    // effect assets: built-ins as their recipe, imported ones as a strip image + frame widths
+    const used = new Set(S.effects.map(e => e.asset));
+    const fxAssets = [...assets].filter(([id]) => used.has(id)).map(([id, a]) => a.spec
+      ? { id, name: a.name, spec: a.spec }
+      : { id, name: a.name, strip: FX.strip(a.frames).toDataURL('image/png'), widths: a.frames.map(c => c.width), durations: a.durations });
+    return JSON.stringify({ app: 'sprite-aligner', version: 3, ...settings, fxAssets,
+      frames: frames.map(f => ({ box: f.box, raw: f.raw, dur: f.dur, ox: f.ox, oy: f.oy, pixel: f.pixel || null, edits: [...f.edits], fx: [...f.fx] })) });
+  }
+
+  async function loadAssets(list = []) {
+    assets.clear(); fxCache.clear();
+    for (const a of list) {
+      if (a.spec) { assets.set(a.id, { ...FX.builtin(a.spec.type, a.spec.color, a.spec.size), name: a.name, spec: a.spec, version: 1 }); continue; }
+      const { canvas } = await loadImage(a.strip);
+      let x = 0;
+      const frames = a.widths.map(w => { const c = document.createElement('canvas'); c.width = w; c.height = canvas.height; c.getContext('2d').drawImage(canvas, -x, 0); x += w; return c; });
+      assets.set(a.id, { name: a.name, frames, durations: a.durations, version: 1 });
+    }
+    const ids = [...assets.keys()].map(id => +id.slice(1)), eids = S.effects.map(e => +e.id.slice(1));
+    nextId = Math.max(nextId, ...ids, ...eids) + 1;
   }
 
   function saveProject() {
@@ -1087,13 +1482,16 @@
     if (p.app !== 'sprite-aligner') throw new Error('sprite-aligner 프로젝트 파일이 아닙니다');
     status('프로젝트 여는 중…'); await tick();
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
-    const { frames, app, version, ...settings } = p;
-    Object.assign(S, settings);
-    pixelCands = [];
+    const { frames, app, version, fxAssets, ...settings } = p;
+    Object.assign(S, { effects: [], head: null, perFramePixel: false }, settings);
+    pixelCands = []; fxSel = null;
+    await loadAssets(fxAssets);
     rekey();
     S.frames = frames.map(f => ({ ...f, edits: new Map(f.edits || []), fx: new Map(f.fx || []) }));
+    if (S.perFramePixel) detectFramePixels();
     S.frames.forEach(prepFrame);
     applyPalettes();
+    if (S.head) compareHeads();
     S.frames.forEach(f => { f.placed = true; });
     cur = 0; boxSel.clear(); selection.clear();
     undoStack.length = redoStack.length = 0;
@@ -1102,6 +1500,6 @@
   }
 
   // ---------- start ----------
-  bindInputs(); bindSource(); bindEditor();
+  bindInputs(); bindSource(); bindEditor(); bindEffects();
   setMode('select'); setTool('move'); syncInputs(); openStep(1);
 })();

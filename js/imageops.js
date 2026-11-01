@@ -224,10 +224,13 @@ const IO = (() => {
         out[o + 3] = 255;
       }
     }
-    return trim({ w: W, h: H, data: out });
+    const t = trim({ w: W, h: H, data: out });
+    // where local pixel (0,0) sits in the source, so source rects (head boxes) can be mapped onto the result
+    t.sx = x0 + gx[t.tx || 0]; t.sy = y0 + gy[t.ty || 0]; t.p = p;
+    return t;
   }
 
-  /** Crop to the opaque bounding box. */
+  /** Crop to the opaque bounding box (tx, ty = where the crop started). */
   function trim(img) {
     const { w, h, data } = img;
     let x0 = w, y0 = h, x1 = -1, y1 = -1;
@@ -237,7 +240,7 @@ const IO = (() => {
     if (x1 < 0) return blank();
     const W = x1 - x0 + 1, H = y1 - y0 + 1, out = new Uint8ClampedArray(W * H * 4);
     for (let y = 0; y < H; y++) out.set(data.subarray(((y + y0) * w + x0) * 4, ((y + y0) * w + x1 + 1) * 4), y * W * 4);
-    return { w: W, h: H, data: out };
+    return { w: W, h: H, data: out, tx: x0, ty: y0 };
   }
 
   /** Remove isolated edge pixels: opaque pixels with at most one opaque 8-neighbour. In place. */
@@ -405,7 +408,46 @@ const IO = (() => {
     return out;
   }
 
-  return { guessKey, keyMask, despill, components, detectFrames, detectPixelSize, downscale, trim,
+  /**
+   * Find the reference head (rect `ref` in source pixels) inside `box` at scales 0.8–1.2: template matching on the
+   * keyed source (colour difference where both are foreground, a fixed penalty where only one is). Coarse grid
+   * first, then a fine search around the best hit. Returns {s, x, y, w, h, cost}: s > 1 = this head is drawn bigger.
+   * Only the upper 60% of the box is searched (heads are on top; crouching frames are just shorter).
+   */
+  function matchHead(img, mask, ref, box) {
+    const { w, h, data } = img, T = [];
+    for (let y = 0; y < ref.h; y += 3) for (let x = 0; x < ref.w; x += 3) {
+      const p = (ref.y + y) * w + ref.x + x;
+      T.push(x, y, mask[p] ? 1 : 0, data[p * 4], data[p * 4 + 1], data[p * 4 + 2]);
+    }
+    const cost = (s, ox, oy) => {
+      let c = 0;
+      for (let i = 0; i < T.length; i += 6) {
+        const X = Math.round(ox + T[i] * s), Y = Math.round(oy + T[i + 1] * s);
+        if (X < 0 || Y < 0 || X >= w || Y >= h) { c += 300; continue; }
+        const q = Y * w + X, fg = mask[q];
+        if (T[i + 2] && fg) c += Math.abs(data[q * 4] - T[i + 3]) + Math.abs(data[q * 4 + 1] - T[i + 4]) + Math.abs(data[q * 4 + 2] - T[i + 5]);
+        else if (T[i + 2] !== fg) c += 300;
+      }
+      return c / (T.length / 6);
+    };
+    let best = { cost: Infinity };
+    const search = (s0, s1, ss, x0, x1, y0, y1, step) => {
+      for (let s = s0; s <= s1 + 1e-9; s += ss) {
+        const xe = Math.min(x1, box.x + box.w - ref.w * s + 4), ye = Math.min(y1, box.y + box.h * 0.6 - ref.h * s + 4);
+        for (let oy = y0; oy <= ye; oy += step) for (let ox = x0; ox <= xe; ox += step) {
+          const c = cost(s, ox, oy);
+          if (c < best.cost) best = { s, x: ox, y: oy, cost: c };
+        }
+      }
+    };
+    search(0.8, 1.2, 0.04, box.x - 4, box.x + box.w, box.y - 4, box.y + box.h, 4);
+    const b = best;
+    search(b.s - 0.04, b.s + 0.04, 0.01, b.x - 4, b.x + 4, b.y - 4, b.y + 4, 1);
+    return { ...best, s: +best.s.toFixed(2), w: Math.round(ref.w * best.s), h: Math.round(ref.h * best.s) };
+  }
+
+  return { guessKey, keyMask, despill, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
            K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, wand };
 })();

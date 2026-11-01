@@ -3,6 +3,7 @@
   --accent: #5aa9ff; --sel: #ffd45a; --btn: #2a2e37; --btnLine: #3a3f4a;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body { margin: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
        font: 13px/1.4 system-ui, "Malgun Gothic", sans-serif; }
@@ -58,6 +59,16 @@ details[open] summary { color: var(--text); margin-bottom: 4px; }
 .iconrow { display: flex; gap: 4px; margin: 2px 0 6px; }
 .iconrow button { flex: 1; height: 30px; font-size: 15px; }
 .hint { color: var(--dim); font-size: 11px; margin: 4px 0; }
+
+.headlist, .fxlist { margin: 4px 0; font-size: 12px; }
+.headrow, .fxrow { padding: 2px 6px; border-radius: 3px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.headrow:hover, .fxrow:hover { background: var(--panel2); }
+.headrow.cur { outline: 1px solid var(--line); }
+.headrow.bad { color: #ff8a6a; }
+.fxrow { display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); margin: 3px 0; }
+.fxrow.on { border-color: #7dffef; }
+.fxrow button { height: 20px; padding: 0 6px; }
+#fxEdit { border-left: 2px solid #7dffef; padding-left: 8px; margin: 6px 0; }
 
 /* main */
 main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
