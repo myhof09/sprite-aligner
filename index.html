@@ -101,6 +101,13 @@
         <label class="btn sm" title="이펙트 시트 PNG (+ 같은 이름의 메타 JSON)나 한 장짜리 그림. 여러 개 같이 골라도 됩니다">시트 가져오기<input type="file" id="fileFx" accept="image/*,.json,application/json" multiple hidden></label>
         <button id="btnFxLayer" class="sm" title="③에서 FX 레이어로 옮긴 픽셀을 이펙트로 만듭니다">FX 레이어 → 이펙트</button>
       </div>
+      <h3>레시피 (pxf.graph@1)</h3>
+      <div class="row">
+        <label class="btn sm" title="pxf 노드 그래프(.pxf.json)를 이 브라우저에서 바로 그려 이펙트로 만듭니다. game.blend와 impactFrame을 기본값으로 씁니다">레시피(JSON) 가져오기<input type="file" id="fileRecipe" accept=".json,application/json" multiple hidden></label>
+      </div>
+      <div class="row"><select id="starter" title="바로 써 볼 수 있는 레시피">
+        <option value="slash">베기 궤적</option><option value="spark">타격 불꽃</option><option value="lightning">번개 내려치기</option><option value="fire">불꽃 폭발</option><option value="dust">먼지 퍼짐</option>
+      </select><button id="btnStarter" class="sm">레시피 추가</button></div>
       <h3>기본 이펙트</h3>
       <div class="row"><select id="fxType" title="코드로 그리는 픽셀 이펙트">
         <option value="slash">베기 궤적</option><option value="spark">타격 불꽃</option><option value="dust">발 먼지</option><option value="glint">칼날 반짝임</option>
@@ -115,6 +122,13 @@
         <div class="row"><label title="겹치는 방식. 더하기 = 빛나는 효과">블렌드</label><select id="fxBlend"><option value="source-over">보통</option><option value="lighter">더하기 (빛)</option><option value="screen">스크린</option></select></div>
         <div class="row slider"><label>불투명도</label><input id="fxOpacity" type="range" min="0.05" max="1" step="0.05"><output for="fxOpacity"></output></div>
         <div class="row" id="fxBuiltinRow"><label>색 · 크기</label><input id="fxBColor" type="color"><input id="fxBSize" type="number" min="3" max="64"></div>
+        <div id="fxRecipe" hidden>
+          <div class="row slider"><label title="레시피의 픽셀 단위 값과 캔버스를 함께 키웁니다 (1 = 원래 크기)">크기</label><input id="rScale" type="range" min="0.5" max="2" step="0.25"><output for="rScale"></output></div>
+          <div class="row slider"><label title="팔레트·틴트 색의 색상을 돌립니다 (밝기는 그대로)">색상 돌리기</label><input id="rHue" type="range" min="-180" max="180" step="5"><output for="rHue"></output></div>
+          <div class="row slider"><label title="재생 속도 배율">속도</label><input id="rSpeed" type="range" min="0.5" max="2" step="0.1"><output for="rSpeed"></output></div>
+          <textarea id="fxJson" rows="9" spellcheck="false" title="레시피 JSON. 고치면 바로 다시 그립니다"></textarea>
+          <div class="row"><span id="fxJsonMsg" class="dim"></span><span class="grow"></span><button id="btnRecipeSave" class="sm" title="고친 레시피를 .pxf.json으로 저장">저장</button></div>
+        </div>
         <button id="btnFxImpact" class="sm wide" title="◎ 임팩트 지점으로 옮깁니다">임팩트 지점에 붙이기</button>
         <label class="chk" title="켜면 프레임마다 위치(키프레임)를 따로 저장합니다. 사이 프레임은 이어서 움직입니다"><input id="fxFollow" type="checkbox"> 칼끝 따라가기 (프레임별 위치)</label>
         <div class="row even"><button id="btnFxTip" class="sm" title="밝은 회색(칼날) 중 몸에서 가장 먼 점을 프레임마다 찾습니다">칼끝 자동 찾기</button><button id="btnFxKeysClear" class="sm">키프레임 지우기</button></div>
@@ -229,6 +243,9 @@
 <script src="js/gif.js"></script>
 <script src="js/sample.js"></script>
 <script src="js/effects.js"></script>
+<script src="js/pxf-defs.js"></script>
+<script src="js/pxf.js"></script>
+<script src="js/pxf-starters.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

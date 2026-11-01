@@ -349,11 +349,81 @@
 
   const fxInst = id => S.effects.find(e => e.id === id);
 
-  /** Which asset frame instance e shows on character frame i (-1 = not visible). */
+  /**
+   * Which asset frame instance e shows on character frame i (-1 = not visible). Assets with their own timing
+   * (recipes, sheets with durations) follow real time: the time since the effect started (plus e.offset ms) picks
+   * the frame. Assets without timing are stretched over the `len` character frames.
+   */
   function fxFrameAt(e, i) {
     if (i < e.start || i >= e.start + e.len) return -1;
-    const n = assets.get(e.asset).frames.length;
-    return Math.min(n - 1, Math.floor((i - e.start) * n / e.len));
+    const a = assets.get(e.asset), n = a.frames.length;
+    if (!a.durations) return Math.min(n - 1, Math.floor((i - e.start) * n / e.len));
+    let t = e.offset || 0;
+    for (let j = e.start; j < i; j++) t += S.frames[j].dur;
+    const total = a.durations.reduce((s, d) => s + d, 0);
+    if (a.loop) t = ((t % total) + total) % total;
+    if (t < 0 || t >= total) return -1;
+    for (let k = 0, acc = 0; k < n; k++) { acc += a.durations[k]; if (t < acc) return k; }
+    return -1;
+  }
+
+  // ---------- pxf.graph@1 recipes ----------
+  const BLEND_FROM_GAME = { add: 'lighter', normal: 'source-over', screen: 'screen' };
+
+  /** Render a recipe into asset fields (frames, durations, …). */
+  function renderRecipe(recipe, ropts) {
+    const r = PXF.render(recipe, ropts);
+    return { name: recipe.name || '레시피', frames: r.frames, durations: r.durations, loop: r.loop, game: r.game, warnings: r.warnings, recipe, ropts };
+  }
+
+  /** Timing that makes the recipe's impactFrame play exactly when our impact frame starts: {start, offset, len}. */
+  function impactTiming(a) {
+    const impMs = a.durations.slice(0, a.game.impactFrame || 0).reduce((s, d) => s + d, 0);
+    // start a few character frames before our impact frame; offset = how far into the recipe we already are then
+    let start = Math.min(S.impact, S.frames.length - 1), acc = 0;
+    while (start > 0 && acc + S.frames[start - 1].dur <= impMs) { start--; acc += S.frames[start].dur; }
+    const offset = impMs - acc, total = a.durations.reduce((s, d) => s + d, 0);
+    let len = 0;
+    for (let t = offset, i = start; i < S.frames.length && t < total; i++) { t += S.frames[i].dur; len++; }
+    return { start, offset, len: Math.max(1, len) };
+  }
+
+  /** Add a recipe as an effect: blend and timing from its "game" block; its impactFrame lands on ours. */
+  function addRecipe(recipe) {
+    let a;
+    try { a = renderRecipe(recipe, { scale: 1, hue: 0, speed: 1 }); } catch (err) { status('레시피 오류: ' + err.message); return; }
+    const id = addAsset(a);
+    addEffect(id, { ...impactTiming(a), blend: BLEND_FROM_GAME[a.game.blend] || 'source-over' });
+    const total = a.durations.reduce((s, d) => s + d, 0);
+    status(`레시피 "${a.name}": ${a.frames.length}프레임 · ${Math.round(total)}ms` + (a.warnings.length ? ` · 그리지 않는 노드: ${a.warnings.join(', ')}` : ''));
+  }
+
+  async function importRecipes(files) {
+    for (const file of files) {
+      try { addRecipe(JSON.parse(await file.text())); }
+      catch (err) { status(`${file.name}: ${err.message}`); }
+    }
+  }
+
+  let recipeTimer = 0;
+  /** Re-render the selected recipe from the text box + sliders (debounced while typing). */
+  function rerenderRecipe(delay = 300) {
+    clearTimeout(recipeTimer);
+    recipeTimer = setTimeout(() => {
+      const e = fxInst(fxSel), a = e && assets.get(e.asset);
+      if (!a || !a.recipe) return;
+      let recipe;
+      try { recipe = JSON.parse($('fxJson').value); } catch (err) { $('fxJsonMsg').textContent = 'JSON 오류: ' + err.message; $('fxJsonMsg').className = 'bad'; return; }
+      const ropts = { scale: +$('rScale').value, hue: +$('rHue').value, speed: +$('rSpeed').value };
+      try {
+        Object.assign(a, renderRecipe(recipe, ropts), { version: a.version + 1 });
+        e.name = a.name;
+        Object.assign(e, impactTiming(a));   // speed / impactFrame may have changed: keep the impact lined up
+        $('fxJsonMsg').textContent = `${a.frames.length}프레임 · ${a.frames[0].width}px` + (a.warnings.length ? ` · 그리지 않는 노드: ${a.warnings.join(', ')}` : ' · 렌더 완료');
+        $('fxJsonMsg').className = 'dim';
+        render();
+      } catch (err) { $('fxJsonMsg').textContent = '레시피 오류: ' + err.message; $('fxJsonMsg').className = 'bad'; }
+    }, delay);
   }
 
   /** Position on frame i: keyframes (linear between them, held outside) when following, else the fixed spot. */
@@ -446,6 +516,14 @@
     $('fxFollow').checked = e.follow;
     $('fxBuiltinRow').hidden = !a.spec;
     if (a.spec) { $('fxBColor').value = a.spec.color; $('fxBSize').value = a.spec.size; }
+    $('fxRecipe').hidden = !a.recipe;
+    if (a.recipe && $('fxRecipe').dataset.asset !== e.asset) {   // fill the editor only when another recipe is selected
+      $('fxRecipe').dataset.asset = e.asset;
+      $('fxJson').value = JSON.stringify(a.recipe, null, 1);
+      $('rScale').value = a.ropts.scale; $('rHue').value = a.ropts.hue; $('rSpeed').value = a.ropts.speed;
+      ['rScale', 'rHue', 'rSpeed'].forEach(id => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; });
+      $('fxJsonMsg').textContent = '';
+    }
     const p = fxPos(e, cur);
     $('fxInfo').textContent = `프레임 ${a.frames.length}장 · 위치 (${p.x}, ${p.y})` + (e.follow ? ` · 키프레임 ${Object.keys(e.keys).length}개` : '');
   }
@@ -453,6 +531,17 @@
   function bindEffects() {
     const edit = fn => () => { const e = fxInst(fxSel); if (!e) return; pushUndo(); fn(e); render(); };
     $('btnFxAdd').onclick = addBuiltin;
+    $('fileRecipe').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) importRecipes(files); };
+    $('btnStarter').onclick = () => addRecipe(JSON.parse(JSON.stringify(PXF_STARTERS[$('starter').value])));
+    $('fxJson').oninput = () => rerenderRecipe(400);
+    for (const id of ['rScale', 'rHue', 'rSpeed']) {
+      $(id).oninput = () => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; };
+      $(id).onchange = () => rerenderRecipe(0);
+    }
+    $('btnRecipeSave').onclick = () => {
+      const e = fxInst(fxSel), a = e && assets.get(e.asset);
+      if (a && a.recipe) download(new Blob([JSON.stringify(a.recipe, null, 2)], { type: 'application/json' }), `${(a.name || 'recipe').replace(/[\\/:*?"<>|\s]+/g, '_')}.pxf.json`);
+    };
     $('btnFxLayer').onclick = fxLayerAsEffect;
     $('fileFx').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) importEffects(files); };
     $('fxStart').onchange = edit(e => { e.start = Math.max(0, Math.min(S.frames.length - 1, Math.round(+$('fxStart').value))); });
@@ -1366,8 +1455,11 @@
           const k = fxFrameAt(e, i), p = fxPos(e, i), x = Math.round(p.x - w / 2), y = Math.round(p.y - h / 2);
           frames.push({ charFrame: i, effectFrame: k, x, y, leftX: S.cellW - x - w });
         }
+        const a = assets.get(e.asset);
         return { name: e.name, image, frameWidth: w, frameHeight: h, frameCount: n, blend: BLEND[e.blend], opacity: e.opacity,
           startFrame: e.start, length: e.len, flip: e.flip, rotation: e.rot, scale: e.scale, frames,
+          ...(a.durations ? { durations: a.durations.map(d => Math.round(d)), offsetMs: Math.round(e.offset || 0), loop: !!a.loop } : {}),
+          ...(a.recipe ? { recipe: a.recipe.name, impactFrame: a.game.impactFrame ?? null } : {}),
           note: 'draw effectFrame at (x, y) in the character cell while charFrame is shown; left-facing: flip it and use leftX' };
       });
     }
@@ -1452,8 +1544,8 @@
     const { frames, ...settings } = S;
     // effect assets: built-ins as their recipe, imported ones as a strip image + frame widths
     const used = new Set(S.effects.map(e => e.asset));
-    const fxAssets = [...assets].filter(([id]) => used.has(id)).map(([id, a]) => a.spec
-      ? { id, name: a.name, spec: a.spec }
+    const fxAssets = [...assets].filter(([id]) => used.has(id)).map(([id, a]) => a.spec ? { id, name: a.name, spec: a.spec }
+      : a.recipe ? { id, name: a.name, recipe: a.recipe, ropts: a.ropts }
       : { id, name: a.name, strip: FX.strip(a.frames).toDataURL('image/png'), widths: a.frames.map(c => c.width), durations: a.durations });
     return JSON.stringify({ app: 'sprite-aligner', version: 3, ...settings, fxAssets,
       frames: frames.map(f => ({ box: f.box, raw: f.raw, dur: f.dur, ox: f.ox, oy: f.oy, pixel: f.pixel || null, edits: [...f.edits], fx: [...f.fx] })) });
@@ -1463,6 +1555,11 @@
     assets.clear(); fxCache.clear();
     for (const a of list) {
       if (a.spec) { assets.set(a.id, { ...FX.builtin(a.spec.type, a.spec.color, a.spec.size), name: a.name, spec: a.spec, version: 1 }); continue; }
+      if (a.recipe) {
+        try { assets.set(a.id, { ...renderRecipe(a.recipe, a.ropts), version: 1 }); }
+        catch (err) { status(`레시피 "${a.name}" 오류: ${err.message}`); assets.set(a.id, { name: a.name, frames: [document.createElement('canvas')], durations: null, version: 1 }); }
+        continue;
+      }
       const { canvas } = await loadImage(a.strip);
       let x = 0;
       const frames = a.widths.map(w => { const c = document.createElement('canvas'); c.width = w; c.height = canvas.height; c.getContext('2d').drawImage(canvas, -x, 0); x += w; return c; });
