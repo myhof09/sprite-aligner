@@ -272,14 +272,15 @@ const PXF = (() => {
 
     Lightning(P, _in, { N, f }) {
       const b = make(N), R = rng(P.seed + (P.rate > 0 ? Math.floor(f / P.rate) * 7919 : 0));
-      // midpoint displacement; branches split off at midpoints
-      const bolt = (x0, y0, x1, y1, depth, jag) => {
+      // midpoint displacement; branches split off at midpoints. Deeper levels get relatively more offset, so the
+      // bolt stays straight overall but is jagged up close (one big bow reads as a curve, not lightning).
+      const bolt = (x0, y0, x1, y1, depth, jag, rand = R) => {
         let pts = [[x0, y0], [x1, y1]];
         for (let d = 0; d < depth; d++) {
           const nx = [];
           for (let i = 0; i < pts.length - 1; i++) {
             const [ax, ay] = pts[i], [bx, by] = pts[i + 1], L = Math.hypot(bx - ax, by - ay);
-            const off = (R() - 0.5) * L * jag;
+            const off = (rand() - 0.5) * L * jag * (0.6 + 0.25 * d);
             nx.push(pts[i], [(ax + bx) / 2 - (by - ay) / (L || 1) * off, (ay + by) / 2 + (bx - ax) / (L || 1) * off]);
           }
           nx.push(pts[pts.length - 1]);
@@ -288,15 +289,20 @@ const PXF = (() => {
         return pts;
       };
       const main = bolt(P.x0 * N, P.y0 * N, P.x1 * N, P.y1 * N, P.detail, P.jag);
-      const shown = Math.floor((main.length - 1) * clamp(P.grow));
+      const segs = main.length - 1, grown = segs * clamp(P.grow), shown = Math.floor(grown);
       for (let i = 0; i < shown; i++) line(b, N, main[i][0], main[i][1], main[i + 1][0], main[i + 1][1], P.thick, P.intensity);
       const total = Math.hypot(P.x1 - P.x0, P.y1 - P.y0) * N;
-      for (let i = 1; i < shown; i++) {
-        if (R() >= P.branch / 3) continue;
-        const [sx, sy] = main[i], [nx2, ny2] = main[Math.min(main.length - 1, i + 1)];
-        const a = Math.atan2(ny2 - sy, nx2 - sx) + (R() < 0.5 ? -1 : 1) * (0.35 + R() * 0.5), L = total * P.branchLen * (0.4 + R() * 0.6);
-        const br = bolt(sx, sy, sx + Math.cos(a) * L, sy + Math.sin(a) * L, Math.max(1, P.detail - 2), P.jag);
-        for (let k = 0; k < br.length - 1; k++) line(b, N, br[k][0], br[k][1], br[k + 1][0], br[k + 1][1], Math.max(1, P.thick - 1), P.intensity * 0.65);
+      // branches: decided for every point (same random sequence whatever `grow` is), drawn only once the main
+      // bolt has reached them, and they grow out at the same speed as the main bolt
+      for (let i = 1; i < segs; i++) {
+        const hit = R() < P.branch * 0.4, side = R() < 0.5 ? -1 : 1, ra = R(), rl = R(), bseed = Math.floor(R() * 1e9);
+        if (!hit || i >= grown) continue;
+        const [sx, sy] = main[i], [nx2, ny2] = main[i + 1];
+        const a = Math.atan2(ny2 - sy, nx2 - sx) + side * (0.35 + ra * 0.5), L = total * P.branchLen * (0.4 + rl * 0.6);
+        const br = bolt(sx, sy, sx + Math.cos(a) * L, sy + Math.sin(a) * L, Math.max(1, P.detail - 2), P.jag, rng(bseed));
+        // pixels the main bolt has grown past this point, in branch segments
+        const bSegs = br.length - 1, bShown = Math.min(bSegs, Math.floor((grown - i) * (total / segs) * bSegs / Math.max(1, L)));
+        for (let k = 0; k < bShown; k++) line(b, N, br[k][0], br[k][1], br[k + 1][0], br[k + 1][1], Math.max(1, P.thick - 1), P.intensity * 0.65);
       }
       return b;
     },
