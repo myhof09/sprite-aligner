@@ -10,6 +10,7 @@
 <header id="top">
   <b class="logo">Sprite Aligner</b>
   <span class="dim" title="모든 처리는 이 브라우저 안에서만 합니다. 그림은 어디에도 올라가지 않습니다.">🔒 업로드 없음</span>
+  <button id="btnFxMode" class="sm" title="캐릭터 없이 이펙트만 만들고 시트 + 메타 JSON으로 내보냅니다">✨ 이펙트만</button>
   <span class="grow"></span>
   <label title="내보내는 파일 이름">이름 <input id="name" type="text" value="sprite"></label>
   <label class="btn sm" title="저장해 둔 프로젝트(.json)를 열어 이어서 편집">프로젝트 열기<input type="file" id="fileProj" accept=".json,application/json" hidden></label>
@@ -244,6 +245,67 @@
 </main>
 </div>
 
+<div id="fxMode" hidden>
+<aside class="fxmSide">
+  <h3>캔버스 크기</h3>
+  <div id="fxmSizes" class="row chips"></div>
+  <div class="row"><label>이름</label><input id="fxmName" type="text"></div>
+
+  <h3>레시피 <small class="dim">(누르면 불러옴)</small></h3>
+  <div id="fxmGallery" class="galgrid fxmGal"></div>
+  <div class="row"><label class="btn sm" title="pxf.graph@1 레시피(.pxf.json) 열기">레시피 열기<input type="file" id="fxmFile" accept=".json,application/json" hidden></label>
+    <button id="fxmSaveRecipe" class="sm" title="지금 모습(조절 포함)을 레시피 .pxf.json으로 저장">레시피 저장</button></div>
+
+  <h3>조절</h3>
+  <div class="row slider"><label title="색상환을 돌립니다">색상 돌리기</label><input id="fxmHue" type="range" min="-180" max="180" step="5"><span><input id="fxmHueV" type="number" class="mini"></span></div>
+  <div class="row slider"><label title="재생 속도 배율 (fps)">속도</label><input id="fxmSpeed" type="range" min="0.25" max="3" step="0.05"><span><input id="fxmSpeedV" type="number" class="mini" step="0.05"></span></div>
+  <div class="row"><label title="게임에서 그리는 방법">블렌드</label><select id="fxmBlend"><option value="add">더하기 (add)</option><option value="screen">스크린 (screen)</option><option value="normal">보통 (normal)</option></select></div>
+  <div class="row"><label title="-1 = 레시피의 impactFrame, 없으면 가장 꽉 찬 프레임. 아래 프레임을 더블클릭해도 됩니다">임팩트 프레임</label><input id="fxmImpact" type="number" min="-1" max="63"></div>
+  <div class="row"><label title="임팩트 프레임을 이만큼 더 보여 줍니다 (타격감)">임팩트 멈춤 ms</label><input id="fxmHold" type="number" min="0" max="1000" step="10"></div>
+  <div class="row"><label>반복</label><select id="fxmLoop"><option value="">레시피 그대로</option><option value="false">한 번</option><option value="true">반복</option></select></div>
+
+  <div id="fxmSlash">
+    <h3>베기 조절 <small class="dim">(호를 쓰는 레시피)</small></h3>
+    <div class="row"><label>궤적 모양</label><select id="fxmShape"></select></div>
+    <div class="row"><label>색 테마</label><select id="fxmTheme"></select></div>
+    <div class="row slider"><label>방향 °</label><input id="fxmS_angle" type="range" min="-180" max="180" step="5"><span><input id="fxmS_angleV" type="number" class="mini"></span></div>
+    <div class="row slider"><label>휘어짐</label><input id="fxmS_curve" type="range" min="0.3" max="2" step="0.05"><span><input id="fxmS_curveV" type="number" class="mini" step="0.05"></span></div>
+    <div class="row slider"><label>반경</label><input id="fxmS_radius" type="range" min="0.4" max="1.6" step="0.05"><span><input id="fxmS_radiusV" type="number" class="mini" step="0.05"></span></div>
+    <div class="row slider"><label>두께</label><input id="fxmS_thick" type="range" min="0.3" max="3" step="0.05"><span><input id="fxmS_thickV" type="number" class="mini" step="0.05"></span></div>
+    <div class="row slider"><label>사라지는 속도</label><input id="fxmS_fade" type="range" min="0.3" max="3" step="0.05"><span><input id="fxmS_fadeV" type="number" class="mini" step="0.05"></span></div>
+    <button id="fxmSlashReset" class="sm wide">베기 조절 되돌리기</button>
+  </div>
+
+  <h3>레시피 JSON <small class="dim">(고치면 바로 다시 그림)</small></h3>
+  <textarea id="fxmJson" rows="12" spellcheck="false"></textarea>
+  <p id="fxmErr" class="bad"></p>
+</aside>
+
+<main class="fxmMain">
+  <div class="bar"><button id="fxmPrev" class="sm">◀</button><button id="fxmPlay" class="sm">⏸ 정지</button><button id="fxmNext" class="sm">▶</button>
+    <span id="fxmFrame"></span><span class="sep"></span><span id="fxmInfo" class="dim"></span></div>
+  <div class="fxmViews wrap">
+    <div><h3>확대 (×N, 체크 = 투명)</h3><canvas id="fxmBig"></canvas></div>
+    <div><h3>게임에서 <small class="dim">(가운데 노란 칸 = 게임 한 칸)</small></h3>
+      <div class="row"><label title="게임의 한 칸 크기(px)">게임 칸</label><input id="fxmTile" type="number" min="8" max="256" value="62">
+        <label title="게임에서 이펙트를 몇 배로 그리는지">배율</label><input id="fxmScale" type="number" min="0.25" max="8" step="0.25" value="1">
+        <label title="보기 확대">보기</label><input id="fxmZoom" type="number" min="1" max="4" value="2"></div>
+      <div class="row"><label class="btn sm" title="게임 배경 그림 (이 브라우저 안에서만 사용)">배경 그림<input type="file" id="fxmBgFile" accept="image/*" hidden></label><button id="fxmBgClear" class="sm">기본 배경</button></div>
+      <canvas id="fxmGame"></canvas></div>
+    <div class="fxmOut">
+      <h3>내보내기</h3>
+      <button id="fxmExport" class="big primary" title="시트 PNG(가로 한 줄) + 메타 JSON">이 이펙트 내보내기</button>
+      <p class="hint">시트: 가로 한 줄, 칸 = 캔버스 크기. 메타: frameWidth/Height · fps · durations · impactFrame · blend · pivot (Phaser <code>load.spritesheet</code>에 바로).</p>
+      <h3>내 이펙트 <small class="dim">(일괄 내보내기)</small></h3>
+      <div class="row even"><button id="fxmAdd" class="sm" title="지금 이펙트를 목록에 담기 (같은 이름이면 바꿈)">목록에 추가</button><button id="fxmAll" class="sm">전체 선택/해제</button></div>
+      <div id="fxmList" class="fxlist"></div>
+      <button id="fxmBatch" class="big" title="체크한 이펙트(없으면 전부)를 .zip 하나로: 이펙트마다 PNG + JSON, 그리고 effects.json 목록">📦 선택 일괄 내보내기 (.zip)</button>
+    </div>
+  </div>
+  <section id="fxmStrip"></section>
+</main>
+</div>
+
 <footer id="statusbar"><span id="status">PNG를 열거나 샘플을 누르세요.</span></footer>
 
 <dialog id="gallery">
@@ -280,5 +342,6 @@
 <script src="js/pxf-starters.js"></script>
 <script src="js/pxf-slash.js"></script>
 <script src="js/app.js"></script>
+<script src="js/fxmode.js"></script>
 </body>
 </html>

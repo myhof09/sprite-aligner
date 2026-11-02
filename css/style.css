@@ -120,3 +120,21 @@ dialog td:first-child { color: var(--sel); white-space: nowrap; }
 dialog form { text-align: right; margin-top: 10px; }
 .autoinfo { font-size: 11px; color: var(--dim); line-height: 1.6; margin: 4px 0; }
 .autoinfo .fast { color: var(--sel); font-weight: 600; }
+
+/* 이펙트만 mode */
+#fxMode { flex: 1; display: flex; min-height: 0; }
+.fxmSide { width: 330px; flex: none; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: 6px 12px 12px; }
+.fxmSide .row > label:first-child:not(.chk):not(.btn) { width: 96px; }
+.fxmSide .row.slider { grid-template-columns: 96px minmax(0, 1fr) 54px; }
+input.mini { width: 54px; height: 22px; padding: 1px 4px; }
+.fxmGal { grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 5px; }
+.fxmGal .galcard { padding: 4px; font-size: 10px; }
+.fxmGal .galcard canvas { width: 48px; height: 48px; }
+#fxmJson { width: 100%; background: #14161b; color: var(--text); border: 1px solid var(--btnLine); border-radius: 4px;
+  font: 11px/1.35 ui-monospace, Consolas, monospace; padding: 4px; resize: vertical; }
+.fxmMain { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.fxmViews { flex: 1; display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.fxmOut { width: 300px; }
+#fxmStrip { flex: none; display: flex; gap: 6px; overflow-x: auto; padding: 6px; background: var(--panel); }
+#fxmStrip .thumb.impact { border-color: #7dffef; }
+#fxmStrip .thumb.cur { border-color: var(--sel); }

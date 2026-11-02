@@ -55,6 +55,29 @@ AI가 만든 "가짜 픽셀아트" 스프라이트 줄(초록 배경, 간격 불
 
 `pivot`은 중심선 x와 발 기준선 y입니다(픽셀 경계 좌표).
 
+## ✨ 이펙트만 모드
+
+위쪽 **✨ 이펙트만**(또는 주소 끝 `#fx`): 캐릭터 없이 스킬 이펙트만 만듭니다.
+
+- **캔버스 크기** 32 · 48 · 64 · 96 · 128 — 레시피는 비율을 지켜 이 크기로 그립니다.
+- **레시피 갤러리**(베기 14종 + 시작용 5종, 움직이는 미리보기), **레시피 열기/저장**(.pxf.json), **JSON 편집**(고치면 바로 다시 그림).
+- **조절**: 색상 돌리기 · 속도 · 블렌드(add / screen / normal) · 임팩트 프레임(필름에서 더블클릭) · 임팩트 멈춤 ms · 반복. 호를 쓰는 레시피는 베기 조절(모양 · 색 테마 · 방향 · 휘어짐 · 반경 · 두께 · 사라지는 속도)도.
+- **미리보기**: 확대 보기, 게임 배경 위 게임 칸(기본 62px) 가운데에 실제 크기로, 블렌드 적용.
+- **내보내기**: 시트 PNG(가로 한 줄) + 메타 JSON. **내 이펙트** 목록(브라우저에 저장)에 담아 두고 체크한 것(없으면 전부)을 **.zip 하나**로 일괄 내보내기: 이펙트마다 `<이름>.png` + `<이름>.json`, 그리고 목록 `effects.json`.
+
+```json
+{
+  "name": "불꽃 폭발", "image": "불꽃_폭발.png",
+  "frameWidth": 64, "frameHeight": 64, "frameCount": 20, "columns": 20, "rows": 1,
+  "fps": 24, "durations": [42, 42, 42, 42, 122, 42], "durationMs": 920, "loop": false,
+  "impactFrame": 4, "impactMs": 168, "blend": "add", "pivot": { "x": 32, "y": 32 },
+  "frames": [{ "index": 0, "x": 0, "y": 0, "w": 64, "h": 64, "duration": 42 }],
+  "source": { "format": "pxf.graph@1", "recipe": { }, "size": 64, "hue": 0, "speed": 1, "impactHold": 80 }
+}
+```
+
+Phaser: `this.load.spritesheet(key, image, { frameWidth, frameHeight })`, 애니메이션 프레임마다 `duration`, `blend`는 `ADD` / `SCREEN` / `NORMAL`, 타격 판정은 `impactMs`에. `source.recipe`로 같은 이펙트를 다시 열 수 있습니다.
+
 ## 파일
 
 - `index.html`, `css/style.css` — 화면
@@ -65,3 +88,4 @@ AI가 만든 "가짜 픽셀아트" 스프라이트 줄(초록 배경, 간격 불
 - `js/pxf.js`, `js/pxf-defs.js`, `js/pxf-starters.js` — pxf.graph@1 레시피 렌더러, 노드 기본값, 시작용 레시피
 - `js/pxf-slash.js` — 베기 레시피 14종, 궤적 모양, 베기 조절(레시피를 바꾼 복사본을 만들어 그림)
 - `js/app.js` — 상태와 UI
+- `js/fxmode.js` — 이펙트만 모드 (캔버스 · 갤러리 · 조절 · 게임 미리보기 · 시트/메타 · 일괄 .zip)
