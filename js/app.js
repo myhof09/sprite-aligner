@@ -492,7 +492,7 @@
   function impactTiming(a) {
     const impMs = a.durations.slice(0, a.game.impactFrame || 0).reduce((s, d) => s + d, 0);
     // start a few character frames before our impact frame; offset = how far into the recipe we already are then
-    let start = Math.min(S.impact, S.frames.length - 1), acc = 0;
+    let start = Math.min(Math.max(0, S.impact), S.frames.length - 1), acc = 0;
     while (start > 0 && acc + S.frames[start - 1].dur <= impMs) { start--; acc += S.frames[start].dur; }
     const offset = impMs - acc, total = a.durations.reduce((s, d) => s + d, 0);
     let len = 0;
@@ -894,7 +894,7 @@
     $('btnFxImpact').onclick = edit(e => {
       if (!S.impactPoint) { status('먼저 ◎ 도구로 임팩트 지점을 찍으세요.'); return; }
       if (e.follow) e.keys[S.impact] = { ...S.impactPoint }; else { e.x = S.impactPoint.x; e.y = S.impactPoint.y; }
-      e.start = Math.min(e.start, S.impact);
+      e.start = Math.min(e.start, Math.max(0, S.impact));
     });
     $('btnFxTip').onclick = edit(e => { status(`칼끝을 ${findBladeTips(e)}개 프레임에서 찾았습니다. 틀린 곳은 ✦ 도구로 끌어 고치세요.`); });
     $('btnFxKeysClear').onclick = edit(e => { e.keys = {}; });
@@ -1161,7 +1161,7 @@
       const c = document.createElement('canvas');
       const lbl = document.createElement('div');
       lbl.className = 'lbl';
-      const star = btn(i === S.impact ? '★' : '☆', '임팩트(타격) 프레임으로 지정', () => { pushUndo(); S.impact = i; render(); });
+      const star = btn(i === S.impact ? '★' : '☆', i === S.impact ? '임팩트 끄기 (임팩트 프레임 없음: 달리기·걷기 같은 반복 동작)' : '임팩트(타격) 프레임으로 지정', () => { pushUndo(); S.impact = i === S.impact ? -1 : i; render(); });
       star.className = 'star' + (i === S.impact ? ' on' : '');
       lbl.append(Object.assign(document.createElement('span'), { textContent: `#${i}` }), star);
       const inp = document.createElement('input');
@@ -1181,7 +1181,7 @@
       return c;
     });
     thumbs.forEach((_, i) => drawThumb(i));
-    $('impactInfo').textContent = S.frames.length ? `임팩트 프레임: #${S.impact}` + (S.impactPoint ? ` · 지점 (${S.impactPoint.x}, ${S.impactPoint.y})` : ' · 지점 없음') : '';
+    $('impactInfo').textContent = !S.frames.length ? '' : S.impact < 0 ? '임팩트 프레임: 없음 (★를 눌러 지정)' : `임팩트 프레임: #${S.impact}` + (S.impactPoint ? ` · 지점 (${S.impactPoint.x}, ${S.impactPoint.y})` : ' · 지점 없음');
   }
   const thumbZoom = () => Math.max(1, Math.min(3, Math.floor(100 / S.cellH)));
   const drawThumb = i => { if (thumbs[i]) drawTips(drawCell(thumbs[i], thumbZoom(), i, { guides: true, sel: true }), thumbZoom(), i, true); };
@@ -1192,7 +1192,7 @@
       S.head.frame = boxAt(S.head.x + S.head.w / 2, S.head.y + S.head.h / 2);
       if (S.head.frame < 0) S.head = null;
     }
-    S.impact = Math.min(S.impact, Math.max(0, S.frames.length - 1));
+    if (S.impact >= 0) S.impact = Math.min(S.impact, Math.max(0, S.frames.length - 1));   // (-1: no impact frame)
     drawSource(); drawEditor(); drawPreview(); drawCompare(); buildStrip(); buildHeadList(); buildFxList(); buildAutoInfo();
     const f = S.frames[cur];
     $('framePixel').value = f && f.pixel ? f.pixel : '';
@@ -1207,6 +1207,7 @@
 
   // the impact frame index follows its frame through reorder / delete / duplicate
   function remapImpact(oldFrames) {
+    if (S.impact < 0) return;
     const f = oldFrames[S.impact], j = S.frames.indexOf(f);
     S.impact = j >= 0 ? j : Math.min(S.impact, S.frames.length - 1);
   }
@@ -1807,8 +1808,8 @@
       totalDuration: durations.reduce((a, b) => a + b, 0),
       loop: S.loop,
       pivot: { x: g.cx, y: g.base, note: 'centre line x, feet baseline y (pixel boundaries)' },
-      impactFrame: S.impact,
-      impactPoint: S.impactPoint,
+      impactFrame: S.impact >= 0 ? S.impact : null,   // (null: no impact frame, e.g. a run cycle)
+      impactPoint: S.impact >= 0 ? S.impactPoint : null,
       guides: { ...g },
       pixelSize: S.pixel,
       palette: [...colors],
