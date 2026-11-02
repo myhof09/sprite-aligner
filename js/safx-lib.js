@@ -159,13 +159,14 @@ const SAFX_LIB = (() => {
   const META = {
     'slash:horizontal': ['베기', ['검', '궤적']], 'slash:rising': ['베기', ['검', '대각선']], 'slash:chop': ['베기', ['검', '세로']],
     'slash:cross': ['베기', ['검', '십자', '연타']], 'slash:iai': ['베기', ['검', '섬광', '직선']], 'slash:afterimage': ['베기', ['잔상']],
-    'slash:flurry': ['베기', ['연타']], 'slash:wind': ['베기', ['바람', '투사체']], 'slash:ink': ['베기', ['먹', '어둠']],
-    'slash:fire': ['베기', ['화염']], 'slash:ice': ['베기', ['얼음']], 'slash:lightning': ['베기', ['전기']], 'slash:spin': ['베기', ['회전', '광역']],
+    'slash:flurry': ['베기', ['연타']], 'slash:wind': [['베기', '바람'], ['투사체']], 'slash:ink': [['베기', '먹·책략'], ['먹', '붓']],
+    'slash:fire': [['베기', '화염'], ['불']], 'slash:ice': [['베기', '얼음'], ['서리']], 'slash:lightning': [['베기', '전기'], ['번개']], 'slash:spin': ['베기', ['회전', '광역']],
     'slash:launcher': ['베기', ['올려치기']], slash: ['베기', ['검', '궤적']], spark: ['타격·둔기', ['타격', '불꽃']], bolt: ['전기', ['낙뢰', '하늘']],
-    blast: ['폭발', ['화염', '광역']], dust: ['연기·먼지', ['먼지', '발']], heal: ['빛·치유', ['회복', '버프']], shockwave: ['땅·바위', ['충격파', '광역']],
+    blast: [['폭발', '화염'], ['광역']], dust: ['연기·먼지', ['먼지', '발']], heal: [['빛·치유', '버프·디버프'], ['회복']], shockwave: ['땅·바위', ['충격파', '광역']],
     aura: ['버프·디버프', ['기운', '반복']], smoke: ['연기·먼지', ['연기']],
   };
-  const withMeta = (key, r) => { const m = META[key]; return m ? { ...r, category: m[0], tags: [...m[1]] } : r; };
+  /** category: one name, or a list (the first is the main one). */
+  const withMeta = (key, r) => { const m = META[key]; return m ? { ...r, category: Array.isArray(m[0]) ? [...m[0]] : m[0], tags: [...m[1]] } : r; };
   /** Every built-in recipe: [{ key, label, get, category, tags }]; slash keys are "slash:<name>". */
   const all = () => [...SLASH_ORDER.map(k => ['slash:' + k, SLASHES[k]]), ...OTHER_ORDER.map(k => [k, OTHERS[k]])]
     .map(([key, [label, make]]) => ({ key, label, get: () => withMeta(key, make()), category: META[key]?.[0] ?? '기타', tags: META[key]?.[1] ?? [] }));

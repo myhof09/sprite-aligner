@@ -207,19 +207,22 @@ const FXMODE = (() => {
 
   /** Every recipe the gallery knows: built-ins, 삼국지 TD, 내 이펙트. order: higher = newer. */
   function gallerySources() {
-    const src = SAFX_LIB.all().map((b, i) => ({ id: b.key, label: b.label, category: b.category, tags: b.tags, get: b.get, order: i }));
-    if (typeof SAFX_SAMGUK !== 'undefined') SAFX_SAMGUK.forEach((x, i) => src.push({ id: x.key, label: x.label, category: SAMGUK, tags: x.recipe.tags || [], get: () => clone(x.recipe), order: 1000 + i }));
-    list.forEach((x, i) => src.push({ id: 'mine:' + x.name, label: x.name, category: MINE, tags: x.recipe?.tags || [], get: () => clone(x.recipe), order: x.at || 2000 + i, mine: x }));
+    // cats: every category the recipe belongs to (the first one is its section in 전체)
+    const cats = c => (Array.isArray(c) ? c : [c || '기타']);
+    const src = SAFX_LIB.all().map((b, i) => ({ id: b.key, label: b.label, cats: cats(b.category), tags: b.tags, get: b.get, order: i }));
+    if (typeof SAFX_MORE !== 'undefined') SAFX_MORE.forEach((b, i) => src.push({ id: b.key, label: b.label, cats: cats(b.category), tags: b.tags, get: b.get, order: 100 + i }));
+    if (typeof SAFX_SAMGUK !== 'undefined') SAFX_SAMGUK.forEach((x, i) => src.push({ id: x.key, label: x.label, cats: cats(x.recipe.category), tags: x.recipe.tags || [], get: () => clone(x.recipe), order: 1000 + i }));
+    list.forEach((x, i) => src.push({ id: 'mine:' + x.name, label: x.name, cats: [MINE], tags: x.recipe?.tags || [], get: () => clone(x.recipe), order: x.at || 2000 + i, mine: x }));
     return src;
   }
 
   const catsOrder = () => [...SAFX_LIB.CATEGORIES, SAMGUK, MINE];
-  const matches = (s, q) => !q || [s.label, s.category, ...(s.tags || [])].some(t => String(t).toLowerCase().includes(q));
+  const matches = (s, q) => !q || [s.label, ...s.cats, ...(s.tags || [])].some(t => String(t).toLowerCase().includes(q));
 
   function buildGallery() {
     const src = gallerySources(), q = $('fxmSearch').value.trim().toLowerCase();
     const shown = src.filter(s => matches(s, q));
-    const count = c => c === ALL ? shown.length : c === FAV ? shown.filter(s => G.favs.includes(s.id)).length : shown.filter(s => s.category === c).length;
+    const count = c => c === ALL ? shown.length : c === FAV ? shown.filter(s => G.favs.includes(s.id)).length : shown.filter(s => s.cats.includes(c)).length;
     // category chips (empty ones dimmed)
     const chips = $('fxmCats');
     chips.innerHTML = '';
@@ -236,7 +239,7 @@ const FXMODE = (() => {
     const gridOf = items => { const g = document.createElement('div'); g.className = 'galgrid fxmGal'; for (const s of sort(items)) g.append(card(s)); return g; };
     if (G.cat === ALL) {
       for (const c of catsOrder()) {
-        const items = shown.filter(s => s.category === c);
+        const items = shown.filter(s => s.cats[0] === c);
         if (!items.length) continue;
         const d = document.createElement('details'), sm = document.createElement('summary');
         d.className = 'fxmSec'; d.open = !G.closed.includes(c);
@@ -246,7 +249,7 @@ const FXMODE = (() => {
         grid.append(d);
       }
     } else {
-      const items = shown.filter(s => (G.cat === FAV ? G.favs.includes(s.id) : s.category === G.cat));
+      const items = shown.filter(s => (G.cat === FAV ? G.favs.includes(s.id) : s.cats.includes(G.cat)));
       if (items.length) grid.append(gridOf(items));
       else grid.innerHTML = `<p class="hint">${q ? '찾는 레시피가 없어요.' : G.cat === FAV ? '☆를 눌러 즐겨찾기에 담으세요.' : G.cat === MINE ? '"목록에 추가"로 담은 이펙트가 여기 나와요.' : '이 분류에는 아직 레시피가 없어요.'}</p>`;
     }
@@ -256,7 +259,7 @@ const FXMODE = (() => {
   /** One card: the peak frame (rendered when it scrolls into view), animated while hovered; ☆ favorite. */
   function card(s) {
     const d = document.createElement('div'), c = document.createElement('canvas'), t = document.createElement('div'), star = document.createElement('button');
-    d.className = 'galcard'; d.title = [s.label, s.category, ...(s.tags || [])].join(' · ');
+    d.className = 'galcard'; d.title = [s.label, ...s.cats, ...(s.tags || [])].join(' · ');
     c.width = c.height = THUMB; c.dataset.id = s.id; c._src = s;
     t.textContent = s.label;
     const fav = () => G.favs.includes(s.id);
