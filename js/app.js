@@ -17,6 +17,7 @@
   const S = {
     name: 'sprite', srcURL: '',
     key: [40, 250, 34], tol: 90, edge: 70, despill: 1,
+    keyEdge: true, keyBorders: true, keyMarks: true,   // background: only what touches the image edge; panel lines; corner watermarks
     bodyFrac: 0.2, minPiece: 8,
     pixel: 4, colors: 24, sharedPalette: true, lone: false, outline: false, outlineColor: '#1c1830',
     cellW: 64, cellH: 64, pad: 2,
@@ -40,6 +41,40 @@
   let nextId = 1;
   let src = null, srcCanvas = null;          // original image + canvas
   let keyed = null, mask = null, keyedCanvas = null;
+  // background settings changed: what the new settings would remove, shown red on the source until 적용 / 되돌리기
+  let keyPreview = null, keyBefore = null;
+  const keyOpts = () => ({ connected: S.keyEdge, borders: S.keyBorders, marks: S.keyMarks });
+  const KEY_FIELDS = ['key', 'tol', 'edge', 'keyEdge', 'keyBorders', 'keyMarks'];
+
+  /** Recompute the removal with the current background settings and show it red (nothing is applied yet). */
+  function previewKey() {
+    if (!src) return;
+    const m = IO.keyMask(src, S.key, S.tol, S.edge, keyOpts());
+    const c = document.createElement('canvas');
+    c.width = src.w; c.height = src.h;
+    const g = c.getContext('2d'), img = g.createImageData(src.w, src.h), d = img.data, sd = src.data;
+    let gone = 0;
+    for (let p = 0; p < m.length; p++) {
+      const i = p * 4;
+      if (m[p]) { d[i] = sd[i]; d[i + 1] = sd[i + 1]; d[i + 2] = sd[i + 2]; d[i + 3] = 255; continue; }
+      gone++;
+      d[i] = Math.round(sd[i] * 0.35 + 255 * 0.65); d[i + 1] = Math.round(sd[i + 1] * 0.35); d[i + 2] = Math.round(sd[i + 2] * 0.35); d[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    keyPreview = { mask: m, canvas: c, gone };
+    showKeyPending();
+    drawSource();
+  }
+  function showKeyPending() {
+    $('keyPending').hidden = !keyPreview;
+    if (keyPreview) $('keyPendingInfo').textContent = `빨간 부분이 지워집니다 (${Math.round(keyPreview.gone / keyPreview.mask.length * 100)}%)`;
+  }
+  /** A background setting is about to change: remember the applied ones (for 되돌리기), then preview. */
+  function keyChanged(apply) {
+    if (!keyBefore) keyBefore = Object.fromEntries(KEY_FIELDS.map(k => [k, JSON.parse(JSON.stringify(S[k]))]));
+    apply();
+    previewKey();
+  }
   let labels = null, comps = [];             // connected regions of the mask
   let cur = 0, mode = 'select', tool = 'move', boxSel = new Set(), pixelCands = [];
   let selection = new Map();                 // frame → Set of local keys (pixels picked by wand / rect / lasso)
@@ -101,7 +136,9 @@
 
   // ---------- pipeline ----------
   function rekey() {
-    mask = IO.keyMask(src, S.key, S.tol, S.edge);
+    mask = IO.keyMask(src, S.key, S.tol, S.edge, keyOpts());
+    keyPreview = null;
+    showKeyPending();
     keyed = IO.despill(src, mask, S.key, S.despill);
     ({ labels, comps } = IO.components(mask, src.w, src.h));
     const view = { w: src.w, h: src.h, data: new Uint8ClampedArray(keyed.data) };
@@ -961,7 +998,8 @@
     dispScale = Math.min(1, ($('srcWrap').clientWidth - 14) / src.w);
     cv.width = Math.round(src.w * dispScale); cv.height = Math.round(src.h * dispScale);
     const g = cv.getContext('2d');
-    if ($('showKeyed').checked) { checker(g, cv.width, cv.height, 8); g.drawImage(keyedCanvas, 0, 0, cv.width, cv.height); }
+    if (keyPreview) g.drawImage(keyPreview.canvas, 0, 0, cv.width, cv.height);   // what the new background settings would remove: red
+    else if ($('showKeyed').checked) { checker(g, cv.width, cv.height, 8); g.drawImage(keyedCanvas, 0, 0, cv.width, cv.height); }
     else g.drawImage(srcCanvas, 0, 0, cv.width, cv.height);
     g.font = '12px system-ui';
     S.frames.forEach((f, i) => {
@@ -1184,7 +1222,7 @@
     'gifScale', 'tile', 'gameScale', 'wandTol', 'islandMax'];
   const INTS = ['cellW', 'cellH', 'zoom', 'pzoom', 'gifScale', 'pad', 'colors', 'tile', 'wandTol', 'islandMax'];
   const CHECKS = ['snap', 'onion', 'grid', 'loop', 'lone', 'sharedPalette', 'outline', 'gifTransparent', 'flipView', 'gameView',
-    'toFx', 'exportLeft', 'batchAutoPixel', 'perFramePixel', 'showEffects'];
+    'toFx', 'exportLeft', 'batchAutoPixel', 'perFramePixel', 'showEffects', 'keyEdge', 'keyBorders', 'keyMarks'];
 
   function syncInputs() {
     for (const k of NUM_INPUTS) $(k).value = S[k];
@@ -1215,7 +1253,7 @@
 
   function bindInputs() {
     const after = {   // what each setting re-runs
-      tol: () => reprocess(true), edge: () => reprocess(true), despill: () => reprocess(true),
+      tol: previewKey, edge: previewKey, despill: () => reprocess(true), keyEdge: previewKey, keyBorders: previewKey, keyMarks: previewKey,
       pixel: () => reprocess(false), lone: () => reprocess(false), colors: repalette, sharedPalette: repalette,
       outline: () => { if (S.outline) { S.outlineColor = darkest(); syncInputs(); } recomposeAll(); },
       cellW: render, cellH: render, zoom: drawEditor, pzoom: drawPreview, grid: render, onion: drawEditor,
@@ -1227,15 +1265,21 @@
       const el = $(k), live = ['zoom', 'pzoom'].includes(k);
       el.addEventListener('input', () => { const o = document.querySelector(`output[for=${k}]`); if (o) o.textContent = el.value; });
       el.addEventListener(live ? 'input' : 'change', () => {
+        if (KEY_FIELDS.includes(k) && !keyBefore) keyBefore = Object.fromEntries(KEY_FIELDS.map(f => [f, JSON.parse(JSON.stringify(S[f]))]));
         const v = +el.value;
         if (!Number.isFinite(v)) return;
         S[k] = INTS.includes(k) ? Math.round(v) : v;
         (after[k] || (() => {}))();
       });
     }
-    for (const k of CHECKS) $(k).addEventListener('change', () => { S[k] = $(k).checked; (after[k] || (() => {}))(); });
+    for (const k of CHECKS) $(k).addEventListener('change', () => {
+      if (KEY_FIELDS.includes(k) && !keyBefore) keyBefore = Object.fromEntries(KEY_FIELDS.map(f => [f, JSON.parse(JSON.stringify(S[f]))]));
+      S[k] = $(k).checked; (after[k] || (() => {}))();
+    });
     $('name').onchange = () => { S.name = $('name').value.trim() || 'sprite'; };
-    $('keyColor').onchange = () => { S.key = hexToRgb($('keyColor').value); reprocess(true); };
+    $('keyColor').onchange = () => keyChanged(() => { S.key = hexToRgb($('keyColor').value); });
+    $('btnKeyApply').onclick = () => { keyBefore = null; reprocess(true); };
+    $('btnKeyUndo').onclick = () => { if (keyBefore) Object.assign(S, keyBefore); keyBefore = null; keyPreview = null; syncInputs(); showKeyPending(); drawSource(); };
     $('gifBg').onchange = () => { S.gifBg = $('gifBg').value; };
     $('outlineColor').onchange = () => { S.outlineColor = $('outlineColor').value; if (S.outline) recomposeAll(); };
     $('paintColor').onchange = () => { S.paintColor = $('paintColor').value; };
@@ -1390,8 +1434,8 @@
       const { x, y } = srcPos(e);
       if (mode === 'pick') {
         const i = (y * src.w + x) * 4;
-        S.key = [src.data[i], src.data[i + 1], src.data[i + 2]];
-        syncInputs(); setMode('select'); reprocess(true);
+        keyChanged(() => { S.key = [src.data[i], src.data[i + 1], src.data[i + 2]]; });
+        syncInputs(); setMode('select');
       } else if (mode === 'select') {
         const i = boxAt(x, y);
         if (i < 0) { boxSel.clear(); drawSource(); return; }
@@ -1886,7 +1930,8 @@
     status('프로젝트 여는 중…'); await tick();
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
-    Object.assign(S, { effects: [], head: null, perFramePixel: false }, settings);
+    // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();

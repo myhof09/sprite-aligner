@@ -35,12 +35,19 @@
     <div class="stepBody">
       <button id="btnAuto" class="big" title="배경 제거 + 프레임 찾기 + AI 픽셀 크기 맞추기를 기본값으로 한 번에">✨ 자동 정리</button>
       <label class="chk" title="원본 창에 배경을 지운 결과를 보여 줍니다"><input id="showKeyed" type="checkbox" checked> 원본 창에 배경 지운 모습 보기</label>
+      <label class="chk" title="그림 가장자리에서 이어진 배경만 지웁니다. 캐릭터 안의 같은 색(검은 바지 등)은 남습니다. 끄면 배경 색과 비슷한 모든 픽셀을 지웁니다"><input id="keyEdge" type="checkbox"> 가장자리에서 연결된 배경만 지우기</label>
+      <div id="keyPending" class="keypending" hidden>
+        <div id="keyPendingInfo"></div>
+        <div class="row even"><button id="btnKeyApply" class="sm primary" title="새 배경 설정으로 다시 지웁니다">적용</button><button id="btnKeyUndo" class="sm" title="배경 설정을 적용된 값으로 되돌립니다">되돌리기</button></div>
+      </div>
       <details>
         <summary>고급 설정</summary>
         <h3>배경</h3>
         <div class="row"><label title="지울 배경 색. 보통 자동으로 잡힙니다">배경 색</label><input id="keyColor" type="color"><button id="btnPickKey" data-mode="pick" class="sm" title="원본 창에서 배경을 클릭해 색을 고릅니다">스포이트</button></div>
         <div class="row slider"><label title="배경 색과 이만큼 비슷하면 지웁니다">허용오차</label><input id="tol" type="range" min="10" max="250"><output for="tol"></output></div>
         <div class="row slider"><label title="그림 가장자리의 섞인 색을 얼마나 더 지울지">가장자리</label><input id="edge" type="range" min="0" max="200"><output for="edge"></output></div>
+        <label class="chk" title="칸을 나누는 테두리 선(가로·세로로 길게 이어진 한 색의 선)을 배경으로 보고 지웁니다"><input id="keyBorders" type="checkbox"> 칸 테두리 선 무시</label>
+        <label class="chk" title="네 모서리에 따로 떨어진 작은 글씨·서명(워터마크)을 지웁니다"><input id="keyMarks" type="checkbox"> 모서리 워터마크 지우기</label>
         <div class="row slider"><label title="가장자리에 남은 초록 기운(디스필)을 지웁니다">초록 테두리 지우기</label><input id="despill" type="range" min="0" max="1" step="0.1"><output for="despill"></output></div>
         <h3>프레임</h3>
         <div class="row slider"><label title="몸체로 볼 최소 크기(가장 큰 덩어리 대비). 낮추면 작은 그림도 프레임이 됩니다">프레임 찾기 민감도</label><input id="bodyFrac" type="range" min="0.05" max="0.8" step="0.05"><output for="bodyFrac"></output></div>

@@ -5,13 +5,21 @@
 const IO = (() => {
   const blank = () => ({ w: 0, h: 0, data: new Uint8ClampedArray(0) });
 
-  /** Median colour of the image border: the usual chroma-key background. */
+  /** Median colour of the image border: the usual chroma-key background. When the very edge is a frame line (its colour
+   *  differs from a ring a few px inside), the inner ring's colour. */
   function guessKey(img) {
-    const { w, h, data } = img, ch = [[], [], []];
-    const add = (x, y) => { const i = (y * w + x) * 4; for (let c = 0; c < 3; c++) ch[c].push(data[i + c]); };
-    for (let x = 0; x < w; x += 2) { add(x, 0); add(x, h - 1); }
-    for (let y = 0; y < h; y += 2) { add(0, y); add(w - 1, y); }
-    return ch.map(a => a.sort((p, q) => p - q)[a.length >> 1]);
+    const { w, h, data } = img;
+    const ring = o => {
+      const ch = [[], [], []];
+      const add = (x, y) => { const i = (y * w + x) * 4; for (let c = 0; c < 3; c++) ch[c].push(data[i + c]); };
+      for (let x = o; x < w - o; x += 2) { add(x, o); add(x, h - 1 - o); }
+      for (let y = o; y < h - o; y += 2) { add(o, y); add(w - 1 - o, y); }
+      return ch.map(a => a.sort((p, q) => p - q)[a.length >> 1]);
+    };
+    const m0 = ring(0), o = Math.min(6, Math.floor(Math.min(w, h) / 10));
+    if (!o) return m0;
+    const m1 = ring(o);
+    return Math.hypot(m0[0] - m1[0], m0[1] - m1[1], m0[2] - m1[2]) > 30 ? m1 : m0;
   }
 
   /** 1 where any 4-neighbour within `r` steps is background. */
@@ -30,27 +38,176 @@ const IO = (() => {
     return near;
   }
 
+  const cdist = (d, i, k) => { const r = d[i] - k[0], g = d[i + 1] - k[1], b = d[i + 2] - k[2]; return Math.sqrt(r * r + g * g + b * b); };
+
   /**
-   * Chroma key. Background = colour distance to `key` <= tol. Then two passes peel the blended rim:
-   * foreground pixels touching the background with distance <= tol + edge are removed too.
+   * The background colours on the border: two for a checker grid (two clusters of border colours, each 15% or more,
+   * more than 18 apart), else null. k-means (k = 2) on a ring a few px inside the border.
    */
-  function keyMask(img, key, tol, edge) {
-    const { w, h, data } = img, n = w * h;
-    const dist = new Float32Array(n), mask = new Uint8Array(n);
-    for (let p = 0; p < n; p++) {
-      const i = p * 4, dr = data[i] - key[0], dg = data[i + 1] - key[1], db = data[i + 2] - key[2];
-      dist[p] = Math.sqrt(dr * dr + dg * dg + db * db);
-      mask[p] = dist[p] > tol ? 1 : 0;
+  function borderKeys(img) {
+    const { w, h, data } = img, pts = [];
+    const o = Math.min(6, Math.floor(Math.min(w, h) / 10));
+    for (const r of [o]) {   // (the ring inside: a frame line drawn on the very edge is not a background colour)
+      for (let x = r; x < w - r; x++) for (const y of [r, h - 1 - r]) { const i = (y * w + x) * 4; pts.push([data[i], data[i + 1], data[i + 2]]); }
+      for (let y = r; y < h - r; y++) for (const x of [r, w - 1 - r]) { const i = (y * w + x) * 4; pts.push([data[i], data[i + 1], data[i + 2]]); }
     }
+    const lum = p => p[0] + p[1] + p[2];
+    pts.sort((p, q) => lum(p) - lum(q));
+    let c = [pts[Math.floor(pts.length * 0.2)], pts[Math.floor(pts.length * 0.8)]].map(p => [...p]), n = [0, 0];
+    for (let it = 0; it < 8; it++) {
+      const sum = [[0, 0, 0], [0, 0, 0]];
+      n = [0, 0];
+      for (const p of pts) {
+        const k = Math.hypot(p[0] - c[0][0], p[1] - c[0][1], p[2] - c[0][2]) <= Math.hypot(p[0] - c[1][0], p[1] - c[1][1], p[2] - c[1][2]) ? 0 : 1;
+        n[k]++; for (let ch = 0; ch < 3; ch++) sum[k][ch] += p[ch];
+      }
+      c = c.map((old, k) => (n[k] ? sum[k].map(v => Math.round(v / n[k])) : old));
+    }
+    const apart = Math.hypot(c[0][0] - c[1][0], c[0][1] - c[1][1], c[0][2] - c[1][2]);
+    return apart > 18 && Math.min(n[0], n[1]) >= pts.length * 0.15 ? c : null;
+  }
+
+  /**
+   * A second background colour on the border (the other square of a checker grid, a JPG's light / dark tiles), or
+   * null: the most common border colour farther than `tol` from `key`, when it covers 15% of the border or more.
+   */
+  function secondKey(img, key, tol) {
+    const { w, h, data } = img, bins = new Map();
+    let n = 0;
+    const add = (x, y) => {
+      const i = (y * w + x) * 4;
+      n++;
+      if (cdist(data, i, key) <= tol) return;
+      const k = ((data[i] >> 4) << 8) | ((data[i + 1] >> 4) << 4) | (data[i + 2] >> 4), b = bins.get(k) || { c: 0, r: 0, g: 0, b: 0 };
+      b.c++; b.r += data[i]; b.g += data[i + 1]; b.b += data[i + 2];
+      bins.set(k, b);
+    };
+    for (let x = 0; x < w; x++) { add(x, 0); add(x, h - 1); }
+    for (let y = 1; y < h - 1; y++) { add(0, y); add(w - 1, y); }
+    let best = null;
+    for (const b of bins.values()) if (!best || b.c > best.c) best = b;
+    return best && best.c >= n * 0.15 ? [best.r / best.c, best.g / best.c, best.b / best.c].map(Math.round) : null;
+  }
+
+  /**
+   * Panel border lines: whole rows / columns (90% or more of their length) of one colour that is not the background,
+   * at most 1% of the image thick. Returns a mask of their pixels (1 = line), or null when there are none.
+   */
+  function borderLines(img, keys, tol) {
+    const { w, h, data } = img, out = new Uint8Array(w * h);
+    let any = false;
+    const scan = (len, count, at) => {   // at(line, i) -> pixel index
+      const hit = [];
+      for (let L = 0; L < count; L++) {
+        const ch = [[], [], []];
+        for (let i = 0; i < len; i += 3) { const q = at(L, i) * 4; for (let c = 0; c < 3; c++) ch[c].push(data[q + c]); }
+        const med = ch.map(v => v.sort((x, y) => x - y)[v.length >> 1]);
+        if (keys.some(k => Math.hypot(med[0] - k[0], med[1] - k[1], med[2] - k[2]) <= tol)) { hit.push(null); continue; }
+        let same = 0;
+        for (let i = 0; i < len; i++) if (cdist(data, at(L, i) * 4, med) <= tol * 0.6) same++;
+        hit.push(same >= len * 0.9 ? med : null);
+      }
+      const maxT = Math.max(3, Math.round(count * 0.01));
+      for (let L = 0; L < count;) {
+        if (!hit[L]) { L++; continue; }
+        let e = L;
+        while (e + 1 < count && hit[e + 1]) e++;
+        if (e - L + 1 <= maxT) for (let k = L; k <= e; k++) for (let i = 0; i < len; i++) { const q = at(k, i); if (cdist(data, q * 4, hit[k]) <= tol * 0.6) { out[q] = 1; any = true; } }
+        L = e + 1;
+      }
+    };
+    scan(w, h, (y, x) => y * w + x);
+    scan(h, w, (x, y) => y * w + x);
+    return any ? out : null;
+  }
+
+  /** Small pieces wholly inside a corner zone (15% of each side): watermarks / signatures. Removed from `mask`. */
+  function dropCornerMarks(mask, w, h) {
+    const seen = new Uint8Array(w * h), zx = w * 0.15, zy = h * 0.15, maxArea = Math.max(40, w * h * 0.015);
+    for (let p0 = 0; p0 < w * h; p0++) {
+      if (!mask[p0] || seen[p0]) continue;
+      const stack = [p0], px = [];
+      seen[p0] = 1;
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      let area = 0;
+      while (stack.length) {
+        const p = stack.pop(), x = p % w, y = (p / w) | 0;
+        if (++area <= maxArea) px.push(p);   // (the whole piece is walked; only small ones are kept to remove)
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy, q = ny * w + nx;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h || !mask[q] || seen[q]) continue;
+          seen[q] = 1; stack.push(q);
+        }
+      }
+      if (area > maxArea) continue;
+      const inX = x1 < zx || x0 > w - zx, inY = y1 < zy || y0 > h - zy;
+      if (inX && inY) for (const p of px) mask[p] = 0;
+    }
+  }
+
+  /**
+   * Background key. Background = colour distance to `key` (or the grid's second colour) <= the fill tolerance. Then
+   * two passes peel the blended rim: foreground pixels touching the background within the peel tolerance go too.
+   * o.connected (default): only background reachable from the image edges goes (flood fill), so the same colour inside
+   *   the character stays; on grey / black / white backgrounds the fill tolerance follows the background's own noise
+   *   (JPG blocks) instead of `tol` (at most `tol`), so dark clothes next to a dark grey background survive.
+   * o.borders: panel border lines count as background (the fill passes through them into every panel).
+   * o.marks: small pieces in the corners (watermarks) go.
+   */
+  function keyMask(img, key, tol, edge, o = {}) {
+    const { w, h, data } = img, n = w * h;
+    const connected = o.connected !== false;
+    // keys: the picked colour; edge mode: a checker grid's two colours instead (when the picked one is one of them or
+    // between them), or a second colour far from the picked one
+    let keys = [key];
+    if (connected) {
+      const bk = borderKeys(img), near = c => Math.hypot(c[0] - key[0], c[1] - key[1], c[2] - key[2]);
+      if (bk && Math.min(near(bk[0]), near(bk[1])) <= Math.hypot(bk[0][0] - bk[1][0], bk[0][1] - bk[1][1], bk[0][2] - bk[1][2])) keys = bk;
+      else { const k2 = secondKey(img, key, tol); if (k2) keys = [key, k2]; }
+    }
+    const dist = new Float32Array(n);
+    for (let p = 0; p < n; p++) { let d = cdist(data, p * 4, keys[0]); if (keys[1]) d = Math.min(d, cdist(data, p * 4, keys[1])); dist[p] = d; }
+    let fill = tol, peel = tol + edge;
+    const grey = Math.max(...key) - Math.min(...key) < 60;
+    if (connected && grey) {
+      // the background's noise: the 95th percentile of the border's background-like pixels
+      const b = [];
+      for (let x = 0; x < w; x++) for (const y of [0, h - 1]) if (dist[y * w + x] <= tol) b.push(dist[y * w + x]);
+      for (let y = 0; y < h; y++) for (const x of [0, w - 1]) if (dist[y * w + x] <= tol) b.push(dist[y * w + x]);
+      b.sort((x, y) => x - y);
+      const noise = b.length ? b[Math.floor(b.length * 0.95)] : 0;
+      fill = Math.max(12, Math.min(tol, noise * 1.6 + 10));
+      peel = fill + edge * fill / tol;
+    }
+    const lines = o.borders !== false ? borderLines(img, keys, tol) : null;
+    const bgLike = p => dist[p] <= fill || (lines && lines[p]);
+    const mask = new Uint8Array(n).fill(1);
+    if (connected) {
+      const q = new Int32Array(n);
+      let head = 0, tail = 0;
+      const seed = p => { if (mask[p] && bgLike(p)) { mask[p] = 0; q[tail++] = p; } };
+      for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+      for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+      if (lines) for (let p = 0; p < n; p++) if (lines[p]) seed(p);
+      while (head < tail) {
+        const p = q[head++], x = p % w;
+        if (x > 0) seed(p - 1);
+        if (x < w - 1) seed(p + 1);
+        if (p >= w) seed(p - w);
+        if (p < n - w) seed(p + w);
+      }
+    } else for (let p = 0; p < n; p++) mask[p] = bgLike(p) ? 0 : 1;
     for (let pass = 0; pass < 2; pass++) {
       const kill = [];
       for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
         const p = y * w + x;
-        if (!mask[p] || dist[p] > tol + edge) continue;
+        if (!mask[p] || dist[p] > peel) continue;
         if ((x > 0 && !mask[p - 1]) || (x < w - 1 && !mask[p + 1]) || (y > 0 && !mask[p - w]) || (y < h - 1 && !mask[p + w])) kill.push(p);
       }
       for (const p of kill) mask[p] = 0;
     }
+    if (o.marks !== false) dropCornerMarks(mask, w, h);
     return mask;
   }
 
