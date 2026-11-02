@@ -152,14 +152,27 @@ const SAFX_LIB = (() => {
   };
   const OTHER_ORDER = Object.keys(OTHERS);
 
-  /** Every built-in recipe: [{ key, label, get }]; slash keys are "slash:<name>". */
-  const all = () => [...SLASH_ORDER.map(k => ({ key: 'slash:' + k, label: SLASHES[k][0], get: SLASHES[k][1] })),
-    ...OTHER_ORDER.map(k => ({ key: k, label: OTHERS[k][0], get: OTHERS[k][1] }))];
+  /** Gallery categories (sa-fx@1 "category"), in display order. */
+  const CATEGORIES = ['베기', '찌르기', '타격·둔기', '투사체', '폭발', '화염', '전기', '얼음', '독·산', '물', '바람', '땅·바위', '빛·치유',
+    '어둠', '먹·책략', '상태이상', '버프·디버프', '소환·순간이동', '연기·먼지', '기타'];
+  /** Category and tags of each built-in recipe (written into the recipe JSON). */
+  const META = {
+    'slash:horizontal': ['베기', ['검', '궤적']], 'slash:rising': ['베기', ['검', '대각선']], 'slash:chop': ['베기', ['검', '세로']],
+    'slash:cross': ['베기', ['검', '십자', '연타']], 'slash:iai': ['베기', ['검', '섬광', '직선']], 'slash:afterimage': ['베기', ['잔상']],
+    'slash:flurry': ['베기', ['연타']], 'slash:wind': ['베기', ['바람', '투사체']], 'slash:ink': ['베기', ['먹', '어둠']],
+    'slash:fire': ['베기', ['화염']], 'slash:ice': ['베기', ['얼음']], 'slash:lightning': ['베기', ['전기']], 'slash:spin': ['베기', ['회전', '광역']],
+    'slash:launcher': ['베기', ['올려치기']], slash: ['베기', ['검', '궤적']], spark: ['타격·둔기', ['타격', '불꽃']], bolt: ['전기', ['낙뢰', '하늘']],
+    blast: ['폭발', ['화염', '광역']], dust: ['연기·먼지', ['먼지', '발']], heal: ['빛·치유', ['회복', '버프']], shockwave: ['땅·바위', ['충격파', '광역']],
+    aura: ['버프·디버프', ['기운', '반복']], smoke: ['연기·먼지', ['연기']],
+  };
+  const withMeta = (key, r) => { const m = META[key]; return m ? { ...r, category: m[0], tags: [...m[1]] } : r; };
+  /** Every built-in recipe: [{ key, label, get, category, tags }]; slash keys are "slash:<name>". */
+  const all = () => [...SLASH_ORDER.map(k => ['slash:' + k, SLASHES[k]]), ...OTHER_ORDER.map(k => [k, OTHERS[k]])]
+    .map(([key, [label, make]]) => ({ key, label, get: () => withMeta(key, make()), category: META[key]?.[0] ?? '기타', tags: META[key]?.[1] ?? [] }));
   /** Recipe by key ("slash:<name>" or another built-in), a fresh copy. */
   function byKey(key) {
-    if (key.startsWith('slash:')) { const s = SLASHES[key.slice(6)]; return s && s[1](); }
-    const o = OTHERS[key];
-    return o && o[1]();
+    const make = key.startsWith('slash:') ? SLASHES[key.slice(6)]?.[1] : OTHERS[key]?.[1];
+    return make && withMeta(key, make());
   }
 
   // ---------- slash controls ----------
@@ -201,6 +214,6 @@ const SAFX_LIB = (() => {
   const sparkleTotal = r => (r.layers || []).filter(L => L.type === 'sparks').reduce((t, L) => t + (L.count ?? 10), 0);
   const hasSlash = r => !!r && Array.isArray(r.layers) && r.layers.some(L => L.type === 'slash');
 
-  return { THEMES, SHAPES, SLASH_ORDER, SLASH_LABELS: Object.fromEntries(SLASH_ORDER.map(k => [k, SLASHES[k][0]])), OTHER_ORDER,
+  return { CATEGORIES, THEMES, SHAPES, SLASH_ORDER, SLASH_LABELS: Object.fromEntries(SLASH_ORDER.map(k => [k, SLASHES[k][0]])), OTHER_ORDER,
     OTHER_LABELS: Object.fromEntries(OTHER_ORDER.map(k => [k, OTHERS[k][0]])), all, byKey, apply, sparkleTotal, hasSlash };
 })();

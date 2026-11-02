@@ -17,7 +17,7 @@ const FXMODE = (() => {
   };
   let out = null;            // last render: { frames, durations, N, fps, F, loop, game, warnings }
   let list = [];             // 내 이펙트 (batch)
-  let bgImg = null, playing = true, cur = 0, timer = 0, galTimer = 0, renderTimer = 0;
+  let bgImg = null, playing = true, cur = 0, timer = 0, galBuilt = false, renderTimer = 0;
 
   // ---------- render ----------
   /** The recipe as rendered: slash controls applied (recipes that draw with Arc), loop override. */
@@ -195,34 +195,137 @@ const FXMODE = (() => {
 
   const SLASH_DEF = { angle: 0, curve: 1, radius: 1, thick: 1, fade: 1 };
 
-  // ---------- gallery ----------
+  // ---------- gallery: categories, search, favorites, sort; thumbnails show the peak frame, animate on hover ----------
+  const GAL_KEY = 'sprite-aligner.fxmode.gallery';
+  const ALL = '전체', FAV = '★ 즐겨찾기', SAMGUK = '삼국지 TD', MINE = '내 이펙트';
+  const THUMB = 72;
+  /** { cat, sort, favs: [id], closed: [category] }: the last category, the sort, favorites, folded sections. */
+  let G = { cat: ALL, sort: 'name', favs: [], closed: [] };
+  try { G = { ...G, ...JSON.parse(localStorage.getItem(GAL_KEY) || '{}') }; } catch { /* storage off */ }
+  const saveGal = () => { try { localStorage.setItem(GAL_KEY, JSON.stringify(G)); } catch { /* storage off */ } };
+  const thumbs = new Map();   // id → { frames, peak } (rendered once, when the card first shows)
+
+  /** Every recipe the gallery knows: built-ins, 삼국지 TD, 내 이펙트. order: higher = newer. */
   function gallerySources() {
-    return SAFX_LIB.all();
+    const src = SAFX_LIB.all().map((b, i) => ({ id: b.key, label: b.label, category: b.category, tags: b.tags, get: b.get, order: i }));
+    if (typeof SAFX_SAMGUK !== 'undefined') SAFX_SAMGUK.forEach((x, i) => src.push({ id: x.key, label: x.label, category: SAMGUK, tags: x.recipe.tags || [], get: () => clone(x.recipe), order: 1000 + i }));
+    list.forEach((x, i) => src.push({ id: 'mine:' + x.name, label: x.name, category: MINE, tags: x.recipe?.tags || [], get: () => clone(x.recipe), order: x.at || 2000 + i, mine: x }));
+    return src;
   }
 
+  const catsOrder = () => [...SAFX_LIB.CATEGORIES, SAMGUK, MINE];
+  const matches = (s, q) => !q || [s.label, s.category, ...(s.tags || [])].some(t => String(t).toLowerCase().includes(q));
+
   function buildGallery() {
-    const grid = $('fxmGallery'), thumbs = [];
-    grid.innerHTML = '';
-    for (const s of gallerySources()) {
-      const d = document.createElement('div'), c = document.createElement('canvas'), t = document.createElement('div');
-      d.className = 'galcard'; t.textContent = s.label; c.width = c.height = 48;
-      try { thumbs.push({ c, frames: SAFX.render(s.get(), { scale: 0.75 }).frames }); } catch { t.textContent += ' (오류)'; }
-      d.onclick = () => loadRecipe(s.get(), s.label);
-      d.append(c, t);
-      grid.append(d);
+    const src = gallerySources(), q = $('fxmSearch').value.trim().toLowerCase();
+    const shown = src.filter(s => matches(s, q));
+    const count = c => c === ALL ? shown.length : c === FAV ? shown.filter(s => G.favs.includes(s.id)).length : shown.filter(s => s.category === c).length;
+    // category chips (empty ones dimmed)
+    const chips = $('fxmCats');
+    chips.innerHTML = '';
+    for (const c of [ALL, FAV, ...catsOrder()]) {
+      const b = document.createElement('button'), n = count(c);
+      b.className = 'sm' + (G.cat === c ? ' on' : '') + (n ? '' : ' empty');
+      b.textContent = `${c} ${n}`;
+      b.onclick = () => { G.cat = c; saveGal(); buildGallery(); };
+      chips.append(b);
     }
-    let f = 0;
-    clearInterval(galTimer);
-    galTimer = setInterval(() => {
-      if ($('fxMode').hidden) return;
-      f++;
-      for (const t of thumbs) {
-        const g = t.c.getContext('2d'), fr = t.frames[f % (t.frames.length + 4)];
-        g.imageSmoothingEnabled = false;
-        g.fillStyle = '#23262e'; g.fillRect(0, 0, 48, 48);
-        if (fr) g.drawImage(fr, 0, 0, 48, 48);
+    const sort = list => list.sort(G.sort === 'new' ? (a, b) => b.order - a.order : (a, b) => a.label.localeCompare(b.label, 'ko'));
+    const grid = $('fxmGallery');
+    grid.innerHTML = '';
+    const gridOf = items => { const g = document.createElement('div'); g.className = 'galgrid fxmGal'; for (const s of sort(items)) g.append(card(s)); return g; };
+    if (G.cat === ALL) {
+      for (const c of catsOrder()) {
+        const items = shown.filter(s => s.category === c);
+        if (!items.length) continue;
+        const d = document.createElement('details'), sm = document.createElement('summary');
+        d.className = 'fxmSec'; d.open = !G.closed.includes(c);
+        sm.textContent = `${c} (${items.length})`;
+        d.ontoggle = () => { G.closed = G.closed.filter(x => x !== c); if (!d.open) G.closed.push(c); saveGal(); };
+        d.append(sm, gridOf(items));
+        grid.append(d);
       }
-    }, 70);
+    } else {
+      const items = shown.filter(s => (G.cat === FAV ? G.favs.includes(s.id) : s.category === G.cat));
+      if (items.length) grid.append(gridOf(items));
+      else grid.innerHTML = `<p class="hint">${q ? '찾는 레시피가 없어요.' : G.cat === FAV ? '☆를 눌러 즐겨찾기에 담으세요.' : G.cat === MINE ? '"목록에 추가"로 담은 이펙트가 여기 나와요.' : '이 분류에는 아직 레시피가 없어요.'}</p>`;
+    }
+    observe();
+  }
+
+  /** One card: the peak frame (rendered when it scrolls into view), animated while hovered; ☆ favorite. */
+  function card(s) {
+    const d = document.createElement('div'), c = document.createElement('canvas'), t = document.createElement('div'), star = document.createElement('button');
+    d.className = 'galcard'; d.title = [s.label, s.category, ...(s.tags || [])].join(' · ');
+    c.width = c.height = THUMB; c.dataset.id = s.id; c._src = s;
+    t.textContent = s.label;
+    const fav = () => G.favs.includes(s.id);
+    star.className = 'star' + (fav() ? ' on' : ''); star.textContent = fav() ? '★' : '☆'; star.title = '즐겨찾기';
+    star.onclick = ev => { ev.stopPropagation(); G.favs = fav() ? G.favs.filter(x => x !== s.id) : [...G.favs, s.id]; saveGal(); buildGallery(); };
+    d.onclick = () => {
+      if (s.mine) { Object.assign(E, clone(s.mine)); delete E.on; delete E.at; syncInputs(); rerender(); return; }
+      loadRecipe(s.get(), s.label);
+    };
+    let anim = 0;
+    const stop = () => { clearInterval(anim); anim = 0; paint(c); };
+    d.onmouseenter = d.ontouchstart = () => {
+      const th = thumbs.get(s.id);
+      if (!th || anim) return;
+      let f = 0;
+      anim = setInterval(() => { paint(c, th.frames[f % (th.frames.length + 3)]); f++; }, 70);
+    };
+    d.onmouseleave = d.ontouchend = stop;
+    d.append(c, t, star);
+    return d;
+  }
+
+  /** Draw a frame (default: the peak) into a thumbnail, scaled down whole-pixel where it fits. */
+  function paint(c, fr) {
+    const th = thumbs.get(c.dataset.id), g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    g.fillStyle = '#23262e'; g.fillRect(0, 0, THUMB, THUMB);
+    if (!th) return;
+    if (fr === undefined) fr = th.frames[th.peak];
+    if (!fr) return;
+    const k = fr.width <= THUMB ? Math.floor(THUMB / fr.width) : THUMB / fr.width, w = fr.width * k;
+    g.drawImage(fr, (THUMB - w) / 2, (THUMB - w) / 2, w, w);
+  }
+
+  /** The frame with the most visible pixels. */
+  function peakOf(frames) {
+    let best = 0, most = -1;
+    frames.forEach((fr, i) => {
+      const dd = fr.getContext('2d').getImageData(0, 0, fr.width, fr.height).data;
+      let n = 0;
+      for (let k = 3; k < dd.length; k += 4) if (dd[k]) n++;
+      if (n > most) { most = n; best = i; }
+    });
+    return best;
+  }
+
+  let thumbRun = 0;
+  /** Fill the thumbnails a few at a time (open sections first, in page order); rendered ones are cached. */
+  function observe() {
+    const run = ++thumbRun, todo = [...$('fxmGallery').querySelectorAll('canvas')]
+      .sort((a, b) => Number(!a.closest('details:not([open])')) > Number(!b.closest('details:not([open])')) ? -1 : 0);
+    const step = () => {
+      if (run !== thumbRun) return;   // the gallery was rebuilt: that run takes over
+      const t0 = performance.now();
+      while (todo.length && performance.now() - t0 < 24) {
+        const c = todo.shift(), s = c._src;
+        if (!thumbs.has(s.id)) {
+          try {
+            const r = s.get();
+            if (SAFX.unsupported(r)) throw new Error('old');
+            const frames = SAFX.render(r).frames;
+            thumbs.set(s.id, { frames, peak: peakOf(frames) });
+          } catch { c.parentElement.classList.add('bad'); c.parentElement.querySelector('div').textContent = s.label + ' (지원 안 함)'; continue; }
+        }
+        paint(c);
+      }
+      if (todo.length) setTimeout(step, 0);
+    };
+    step();
   }
 
   // ---------- export ----------
@@ -316,12 +419,13 @@ const FXMODE = (() => {
 
   // ---------- 내 이펙트 (batch list) ----------
   const snapshot = () => ({ name: E.name, recipe: clone(E.recipe), size: E.size, hue: E.hue, speed: E.speed, blend: E.blend,
-    impactFrame: E.impactFrame, impactHold: E.impactHold, loop: E.loop, slash: { ...E.slash }, on: true });
+    impactFrame: E.impactFrame, impactHold: E.impactHold, loop: E.loop, slash: { ...E.slash }, on: true, at: Date.now() });
 
   function saveList() { try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch { /* storage off: the list lives for this visit */ } }
   function loadList() { try { list = JSON.parse(localStorage.getItem(LS_KEY) || '[]') || []; } catch { list = []; } }
 
   function buildList() {
+    if (galBuilt) buildGallery();
     const el = $('fxmList');
     el.innerHTML = '';
     if (!list.length) { el.innerHTML = '<p class="hint">아직 없어요. 만든 이펙트를 "목록에 추가"로 담아 두면 한꺼번에 내보낼 수 있어요.</p>'; return; }
@@ -353,7 +457,7 @@ const FXMODE = (() => {
     $('body').hidden = on;
     $('btnFxMode').classList.toggle('on', on);
     try { localStorage.setItem('sprite-aligner.mode', on ? 'fx' : 'char'); } catch { /* ignore */ }
-    if (on) { if (!galTimer) buildGallery(); if (!out) rerender(); else play(); status('이펙트만: 캐릭터 없이 이펙트를 만들고 시트 + 메타 JSON으로 내보냅니다.'); }
+    if (on) { if (!galBuilt) { galBuilt = true; buildGallery(); } if (!out) rerender(); else play(); status('이펙트만: 캐릭터 없이 이펙트를 만들고 시트 + 메타 JSON으로 내보냅니다.'); }
     else clearTimeout(timer);
   }
 
@@ -426,6 +530,10 @@ const FXMODE = (() => {
     $('fxmAll').onclick = () => { const on = !list.every(x => x.on); list.forEach(x => (x.on = on)); saveList(); buildList(); };
     $('btnFxMode').onclick = () => setMode($('fxMode').hidden);
 
+    $('fxmSort').value = G.sort;
+    $('fxmSort').onchange = () => { G.sort = $('fxmSort').value; saveGal(); buildGallery(); };
+    let searchTimer = 0;
+    $('fxmSearch').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(buildGallery, 150); };
     loadList(); buildList(); syncInputs(); syncPlay();
     let mode = 'char';
     try { mode = localStorage.getItem('sprite-aligner.mode') || 'char'; } catch { /* ignore */ }

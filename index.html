@@ -251,8 +251,10 @@
   <div id="fxmSizes" class="row chips"></div>
   <div class="row"><label>이름</label><input id="fxmName" type="text"></div>
 
-  <h3>레시피 <small class="dim">(누르면 불러옴)</small></h3>
-  <div id="fxmGallery" class="galgrid fxmGal"></div>
+  <h3>레시피 <small class="dim">(누르면 불러옴 · 올리면 움직임 · ☆ 즐겨찾기)</small></h3>
+  <div class="row"><input id="fxmSearch" type="search" placeholder="이름 · 태그 검색" class="grow"><select id="fxmSort" title="정렬"><option value="name">이름순</option><option value="new">새 것부터</option></select></div>
+  <div id="fxmCats" class="fxmCats"></div>
+  <div id="fxmGallery"></div>
   <div class="row"><label class="btn sm" title="sa-fx@1 레시피(.safx.json) 열기. 형식: docs/fx-format.md">레시피 열기<input type="file" id="fxmFile" accept=".json,application/json" hidden></label>
     <button id="fxmSaveRecipe" class="sm" title="지금 모습(조절 포함)을 레시피 .safx.json으로 저장">레시피 저장</button></div>
 
@@ -339,6 +341,7 @@
 <script src="js/effects.js"></script>
 <script src="js/safx.js"></script>
 <script src="js/safx-lib.js"></script>
+<script src="js/safx-samguk.js"></script>
 <script src="js/app.js"></script>
 <script src="js/fxmode.js"></script>
 </body>

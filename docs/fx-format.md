@@ -37,6 +37,8 @@ Sprite Aligner renders recipes in the browser (`js/safx.js`). Nothing else is ne
 |---|---|---|---|
 | `format` | `"sa-fx@1"` | required | Format marker. |
 | `name` | text | `"effect"` | Display / file name. |
+| `category` | text | `"기타"` | Gallery category: 베기, 찌르기, 타격·둔기, 투사체, 폭발, 화염, 전기, 얼음, 독·산, 물, 바람, 땅·바위, 빛·치유, 어둠, 먹·책략, 상태이상, 버프·디버프, 소환·순간이동, 연기·먼지, 기타 (or 삼국지 TD). |
+| `tags` | text list | `[]` | Search words, e.g. `["폭발", "광역"]`. |
 | `size` | 8–256 | 64 | Canvas width = height, in pixels. |
 | `frames` | 1–64 | 12 | Number of frames. |
 | `fps` | number | 24 | Frames per second (every frame lasts 1000 / fps ms). |
