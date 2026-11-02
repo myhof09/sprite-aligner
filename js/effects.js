@@ -88,7 +88,7 @@ const FX = (() => {
    * frameWidth/frameHeight (+frameCount). Without meta: `count` equal frames in a row (1 = single image).
    */
   function fromSheet(img, meta, name, count = 1) {
-    let rects = [], durations = null;
+    let rects = [], durations = null, loop = false, game = null, pivot = null;
     if (meta) {
       const list = Array.isArray(meta.frames) ? meta.frames : meta.frames && typeof meta.frames === 'object' ? Object.values(meta.frames) : null;
       if (list && list.length && (list[0].frame || list[0].w)) {
@@ -100,18 +100,29 @@ const FX = (() => {
         for (let i = 0; i < n; i++) rects.push({ x: (i % cols) * fw, y: Math.floor(i / cols) * fh, w: fw, h: fh });
       }
       if (Array.isArray(meta.durations)) durations = meta.durations;
+      // pixelfx sheets (Aseprite JSON + meta.pixelfx: fps, loop, pivot, act; meta.play from samguk-td fx:render)
+      const px = meta.meta && meta.meta.pixelfx;
+      if (px) {
+        loop = !!px.loop;
+        if (Array.isArray(px.pivot)) pivot = px.pivot;
+        const play = meta.meta.play, hit = px.act && px.act.hits && px.act.hits[0];
+        const impactFrame = play && play.impactFrame >= 0 ? play.impactFrame : hit ? Math.round(hit.t * (px.fps || 30)) : 0;
+        game = { blend: (play && play.blend) || 'add', impactFrame: px.loop ? 0 : impactFrame };
+      }
     }
     if (!rects.length) {
       const fw = Math.floor(img.width / count);
       for (let i = 0; i < count; i++) rects.push({ x: i * fw, y: 0, w: fw, h: img.height });
     }
+    // effects are placed by their centre: pad a pixelfx frame so its pivot (e.g. the feet) is the centre
     const frames = rects.map(r => {
       const c = document.createElement('canvas');
-      c.width = r.w; c.height = r.h;
-      c.getContext('2d').drawImage(img, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+      const px = pivot ? Math.max(pivot[0], r.w - pivot[0]) : 0, py = pivot ? Math.max(pivot[1], r.h - pivot[1]) : 0;
+      c.width = pivot ? px * 2 : r.w; c.height = pivot ? py * 2 : r.h;
+      c.getContext('2d').drawImage(img, r.x, r.y, r.w, r.h, pivot ? px - pivot[0] : 0, pivot ? py - pivot[1] : 0, r.w, r.h);
       return c;
     });
-    return { name, frames, durations };
+    return { name, frames, durations, ...(game ? { loop, game, pivot } : {}) };
   }
 
   /**

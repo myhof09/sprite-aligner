@@ -381,7 +381,9 @@
       // no meta: a row of square frames if the width is a multiple of the height, else one image
       const count = !meta && canvas.width % canvas.height === 0 ? canvas.width / canvas.height : 1;
       const a = FX.fromSheet(canvas, meta, stem, count);
-      addEffect(addAsset({ ...a, url, meta, count }));
+      const id = addAsset({ ...a, url, meta, count });
+      // pixelfx sheets: blend and impact like a recipe (its impact frame lands on ours), its pivot at the impact point
+      addEffect(id, a.game ? { ...(a.durations && S.frames.length ? impactTiming(a) : {}), blend: BLEND_FROM_GAME[a.game.blend] || 'source-over' } : {});
     }
     status(`이펙트 ${pngs.length}개를 가져왔습니다.`);
   }
@@ -1886,7 +1888,7 @@
     const fxAssets = [...assets].filter(([id]) => used.has(id)).map(([id, a]) => a.spec ? { id, name: a.name, spec: a.spec }
       : a.recipe ? { id, name: a.name, recipe: a.recipe, ropts: a.ropts, slash: a.slash || null }
       : a.kind === 'autoTrail' ? { id, name: a.name, kind: 'autoTrail' }
-      : { id, name: a.name, strip: FX.strip(a.frames).toDataURL('image/png'), widths: a.frames.map(c => c.width), durations: a.durations });
+      : { id, name: a.name, strip: FX.strip(a.frames).toDataURL('image/png'), widths: a.frames.map(c => c.width), durations: a.durations, ...(a.loop ? { loop: true } : {}) });
     return JSON.stringify({ app: 'sprite-aligner', version: 3, ...settings, fxAssets,
       frames: frames.map(f => ({ box: f.box, raw: f.raw, dur: f.dur, ox: f.ox, oy: f.oy, pixel: f.pixel || null, edits: [...f.edits], fx: [...f.fx] })) });
   }
@@ -1908,7 +1910,7 @@
       const { canvas } = await loadImage(a.strip);
       let x = 0;
       const frames = a.widths.map(w => { const c = document.createElement('canvas'); c.width = w; c.height = canvas.height; c.getContext('2d').drawImage(canvas, -x, 0); x += w; return c; });
-      assets.set(a.id, { name: a.name, frames, durations: a.durations, version: 1 });
+      assets.set(a.id, { name: a.name, frames, durations: a.durations, ...(a.loop ? { loop: true } : {}), version: 1 });
     }
     const ids = [...assets.keys()].map(id => +id.slice(1)), eids = S.effects.map(e => +e.id.slice(1));
     nextId = Math.max(nextId, ...ids, ...eids) + 1;
