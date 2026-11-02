@@ -369,17 +369,17 @@
     return -1;
   }
 
-  // ---------- pxf.graph@1 recipes ----------
+  // ---------- sa-fx@1 recipes (docs/fx-format.md) ----------
   const BLEND_FROM_GAME = { add: 'lighter', normal: 'source-over', screen: 'screen' };
 
   /** Render a recipe into asset fields (frames, durations, …). `slash` = trail shape / slash controls (optional). */
   function renderRecipe(recipe, ropts, slash = null) {
-    const r = PXF.render(slash ? PXF_SLASH.apply(recipe, slash) : recipe, ropts);
+    const r = SAFX.render(slash ? SAFX_LIB.apply(recipe, slash) : recipe, ropts);
     return { name: recipe.name || '레시피', frames: r.frames, durations: r.durations, loop: r.loop, game: r.game, warnings: r.warnings, recipe, ropts, slash };
   }
 
-  /** Recipe by starter key: "slash:<name>" for slash recipes, else the five general starters. */
-  const starterRecipe = key => key.startsWith('slash:') ? PXF_SLASH.recipe(key.slice(6)) : JSON.parse(JSON.stringify(PXF_STARTERS[key]));
+  /** Built-in recipe by key: "slash:<name>" for slash recipes, else the other built-ins (spark, dust, …). */
+  const starterRecipe = key => SAFX_LIB.byKey(key);
 
   const SLASH_IDS = ['slAngle', 'slCurve', 'slRadius', 'slThick', 'slFade', 'slSparkle'];
   /** Slash controls → settings object (stored on the asset, saved in the project). */
@@ -389,8 +389,8 @@
     const s = a.slash || {};
     $('slShape').value = s.shape || 'original'; $('slTheme').value = s.theme || '';
     $('slAngle').value = s.angle || 0; $('slCurve').value = s.curve || 1; $('slRadius').value = s.radius || 1; $('slThick').value = s.thick || 1; $('slFade').value = s.fade || 1;
-    $('slSparkle').value = s.sparkle ?? PXF_SLASH.sparkleTotal(a.recipe);
-    $('slShape').disabled = !PXF_SLASH.hasArc(a.recipe);
+    $('slSparkle').value = s.sparkle ?? SAFX_LIB.sparkleTotal(a.recipe);
+    $('slShape').disabled = !SAFX_LIB.hasSlash(a.recipe);
     SLASH_IDS.forEach(id => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; });
   }
 
@@ -401,19 +401,18 @@
     const card = (label, graph, onPick) => {
       const d = document.createElement('div'), c = document.createElement('canvas'), t = document.createElement('div');
       d.className = 'galcard'; t.textContent = label; c.width = c.height = 64;
-      try { thumbs.push({ c, frames: PXF.render(graph).frames }); } catch { t.textContent += ' (오류)'; }
+      try { thumbs.push({ c, frames: SAFX.render(graph).frames }); } catch { t.textContent += ' (오류)'; }
       d.append(c, t); d.onclick = () => { $('gallery').close(); onPick(); };
       return d;
     };
     const rec = $('galRecipes'), shp = $('galShapes');
     rec.innerHTML = ''; shp.innerHTML = '';
-    for (const k of PXF_SLASH.RECIPE_ORDER) rec.append(card(PXF_SLASH.RECIPE_LABELS[k], PXF_SLASH.recipe(k), () => addRecipe(PXF_SLASH.recipe(k))));
-    for (const [k, g] of Object.entries(PXF_STARTERS)) rec.append(card(g.name, g, () => addRecipe(starterRecipe(k))));
+    for (const b of SAFX_LIB.all()) rec.append(card(b.label, b.get(), () => addRecipe(b.get())));
     // shapes are shown on the selected slash recipe (or a plain horizontal slash)
-    const e = fxInst(fxSel), a = e && assets.get(e.asset), base = a && a.recipe && PXF_SLASH.hasArc(a.recipe) ? a.recipe : PXF_SLASH.recipe('horizontal');
-    for (const [k, label] of Object.entries(PXF_SLASH.SHAPES)) shp.append(card(label, PXF_SLASH.apply(base, { ...(a && a.slash), shape: k }), () => {
-      if (a && a.recipe && PXF_SLASH.hasArc(a.recipe)) { a.slash = { ...(a.slash || readSlash()), shape: k }; showSlash(a); rerenderRecipe(0); }
-      else { addRecipe(PXF_SLASH.recipe('horizontal')); const n = assets.get(fxInst(fxSel).asset); n.slash = { shape: k }; $('fxRecipe').dataset.asset = ''; buildFxList(); rerenderRecipe(0); }
+    const e = fxInst(fxSel), a = e && assets.get(e.asset), base = a && a.recipe && SAFX_LIB.hasSlash(a.recipe) ? a.recipe : starterRecipe('slash:horizontal');
+    for (const [k, label] of Object.entries(SAFX_LIB.SHAPES)) shp.append(card(label, SAFX_LIB.apply(base, { ...(a && a.slash), shape: k }), () => {
+      if (a && a.recipe && SAFX_LIB.hasSlash(a.recipe)) { a.slash = { ...(a.slash || readSlash()), shape: k }; showSlash(a); rerenderRecipe(0); }
+      else addRecipe(starterRecipe('slash:horizontal')).then(() => { const n = assets.get(fxInst(fxSel).asset); n.slash = { shape: k }; $('fxRecipe').dataset.asset = ''; buildFxList(); rerenderRecipe(0); });
     }));
     let f = 0;
     clearInterval(galTimer);
@@ -442,18 +441,19 @@
   }
 
   /** Add a recipe as an effect: blend and timing from its "game" block; its impactFrame lands on ours. */
-  function addRecipe(recipe) {
+  async function addRecipe(recipe) {
     let a;
+    await SAFX.preload(recipe);
     try { a = renderRecipe(recipe, { scale: 1, hue: 0, speed: 1 }); } catch (err) { status('레시피 오류: ' + err.message); return; }
     const id = addAsset(a);
     addEffect(id, { ...impactTiming(a), blend: BLEND_FROM_GAME[a.game.blend] || 'source-over' });
     const total = a.durations.reduce((s, d) => s + d, 0);
-    status(`레시피 "${a.name}": ${a.frames.length}프레임 · ${Math.round(total)}ms` + (a.warnings.length ? ` · 그리지 않는 노드: ${a.warnings.join(', ')}` : ''));
+    status(`레시피 "${a.name}": ${a.frames.length}프레임 · ${Math.round(total)}ms` + (a.warnings.length ? ` · ${a.warnings.join(', ')}` : ''));
   }
 
   async function importRecipes(files) {
     for (const file of files) {
-      try { addRecipe(JSON.parse(await file.text())); }
+      try { await addRecipe(JSON.parse(await file.text())); }
       catch (err) { status(`${file.name}: ${err.message}`); }
     }
   }
@@ -462,21 +462,22 @@
   /** Re-render the selected recipe from the text box + sliders (debounced while typing). */
   function rerenderRecipe(delay = 300) {
     clearTimeout(recipeTimer);
-    recipeTimer = setTimeout(() => {
+    recipeTimer = setTimeout(async () => {
       const e = fxInst(fxSel), a = e && assets.get(e.asset);
       if (!a || !a.recipe) return;
       let recipe;
       try { recipe = JSON.parse($('fxJson').value); } catch (err) { $('fxJsonMsg').textContent = 'JSON 오류: ' + err.message; $('fxJsonMsg').className = 'bad'; return; }
+      await SAFX.preload(recipe);
       const ropts = { scale: +$('rScale').value, hue: +$('rHue').value, speed: +$('rSpeed').value };
       const slash = readSlash();
       if (!slash.theme) delete slash.theme;
-      if (slash.sparkle === PXF_SLASH.sparkleTotal(recipe)) delete slash.sparkle;   // untouched: keep the recipe's own counts
+      if (slash.sparkle === SAFX_LIB.sparkleTotal(recipe)) delete slash.sparkle;   // untouched: keep the recipe's own counts
       try {
         Object.assign(a, renderRecipe(recipe, ropts, slash), { version: a.version + 1 });
         if (slash.theme === 'ink' && e.blend === 'lighter') e.blend = 'source-over';   // black ink is invisible when added
         e.name = a.name;
         Object.assign(e, impactTiming(a));   // speed / impactFrame may have changed: keep the impact lined up
-        $('fxJsonMsg').textContent = `${a.frames.length}프레임 · ${a.frames[0].width}px` + (a.warnings.length ? ` · 그리지 않는 노드: ${a.warnings.join(', ')}` : ' · 렌더 완료');
+        $('fxJsonMsg').textContent = `${a.frames.length}프레임 · ${a.frames[0].width}px` + (a.warnings.length ? ` · ${a.warnings.join(', ')}` : ' · 렌더 완료');
         $('fxJsonMsg').className = 'dim';
         render();
       } catch (err) { $('fxJsonMsg').textContent = '레시피 오류: ' + err.message; $('fxJsonMsg').className = 'bad'; }
@@ -612,7 +613,7 @@
    */
   function trailFrames() {
     const A = S.autoFx, tips = A.tips, { swings } = swingInfo(tips), shape = A.shape;
-    const cols = PXF_SLASH.THEMES[A.style].colors.map(hexToRgb), W = S.cellW, H = S.cellH;
+    const cols = SAFX_LIB.THEMES[A.style].colors.map(hexToRgb), W = S.cellW, H = S.cellH;
     return S.frames.map((_, i) => {
       const c = document.createElement('canvas');
       c.width = W; c.height = H;
@@ -779,9 +780,10 @@
     $('btnFxAdd').onclick = addBuiltin;
     $('fileRecipe').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) importRecipes(files); };
     $('btnStarter').onclick = () => addRecipe(starterRecipe($('starter').value));
-    for (const k of PXF_SLASH.RECIPE_ORDER) $('starterSlash').append(new Option(PXF_SLASH.RECIPE_LABELS[k], 'slash:' + k));
-    for (const [k, label] of Object.entries(PXF_SLASH.SHAPES)) $('slShape').append(new Option(label, k));
-    for (const [k, t] of Object.entries(PXF_SLASH.THEMES)) $('slTheme').append(new Option(t.label, k));
+    for (const k of SAFX_LIB.SLASH_ORDER) $('starterSlash').append(new Option(SAFX_LIB.SLASH_LABELS[k], 'slash:' + k));
+    for (const k of SAFX_LIB.OTHER_ORDER) $('starterOther').append(new Option(SAFX_LIB.OTHER_LABELS[k], k));
+    for (const [k, label] of Object.entries(SAFX_LIB.SHAPES)) $('slShape').append(new Option(label, k));
+    for (const [k, t] of Object.entries(SAFX_LIB.THEMES)) $('slTheme').append(new Option(t.label, k));
     $('slShape').onchange = $('slTheme').onchange = () => rerenderRecipe(0);
     for (const id of SLASH_IDS) {
       $(id).oninput = () => { document.querySelector(`output[for=${id}]`).textContent = $(id).value; };
@@ -790,7 +792,7 @@
     $('btnGallery').onclick = openGallery;
     // automatic effects
     for (const [k, label] of Object.entries({ whiteblue: '기본 (흰·파랑)', gold: '금빛', fire: '화염', ice: '얼음', ink: '먹 (잉크)', volt: '번개' })) $('autoStyle').append(new Option(label, k));
-    for (const k of ['tapered', 'crescent', 'halfmoon', 'comet', 'ribbon', 'segmented', 'jagged', 'double', 'zigzag']) $('autoShape').append(new Option(PXF_SLASH.SHAPES[k], k));
+    for (const k of ['tapered', 'crescent', 'halfmoon', 'comet', 'ribbon', 'segmented', 'jagged', 'double', 'zigzag']) $('autoShape').append(new Option(SAFX_LIB.SHAPES[k], k));
     const autoSync = () => { $('autoStyle').value = S.autoFx.style; $('autoShape').value = S.autoFx.shape; ['trail', 'spark', 'dust'].forEach(k => { $('auto_' + k).checked = S.autoFx[k]; }); };
     autoSync();
     const autoChanged = () => {
@@ -808,7 +810,7 @@
     }
     $('btnRecipeSave').onclick = () => {
       const e = fxInst(fxSel), a = e && assets.get(e.asset);
-      if (a && a.recipe) download(new Blob([JSON.stringify(a.recipe, null, 2)], { type: 'application/json' }), `${(a.name || 'recipe').replace(/[\\/:*?"<>|\s]+/g, '_')}.pxf.json`);
+      if (a && a.recipe) download(new Blob([JSON.stringify(a.recipe, null, 2)], { type: 'application/json' }), `${(a.name || 'recipe').replace(/[\\/:*?"<>|\s]+/g, '_')}.safx.json`);
     };
     $('btnFxLayer').onclick = fxLayerAsEffect;
     $('fileFx').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) importEffects(files); };
@@ -1847,12 +1849,16 @@
 
   async function loadAssets(list = []) {
     assets.clear(); fxCache.clear();
+    const old = [];   // pxf.graph@1 recipes of older projects: kept as empty placeholders
     for (const a of list) {
       if (a.spec) { assets.set(a.id, { ...FX.builtin(a.spec.type, a.spec.color, a.spec.size), name: a.name, spec: a.spec, version: 1 }); continue; }
       if (a.kind === 'autoTrail') { assets.set(a.id, { name: a.name, frames: [document.createElement('canvas')], durations: null, kind: 'autoTrail', version: 1 }); continue; }
       if (a.recipe) {
+        const blank = name => assets.set(a.id, { name, frames: [document.createElement('canvas')], durations: null, version: 1 });
+        if (SAFX.unsupported(a.recipe)) { blank(`${a.name} (지원 안 함)`); old.push(a.name); continue; }
+        await SAFX.preload(a.recipe);
         try { assets.set(a.id, { ...renderRecipe(a.recipe, a.ropts, a.slash), version: 1 }); }
-        catch (err) { status(`레시피 "${a.name}" 오류: ${err.message}`); assets.set(a.id, { name: a.name, frames: [document.createElement('canvas')], durations: null, version: 1 }); }
+        catch (err) { status(`레시피 "${a.name}" 오류: ${err.message}`); blank(a.name); }
         continue;
       }
       const { canvas } = await loadImage(a.strip);
@@ -1862,6 +1868,11 @@
     }
     const ids = [...assets.keys()].map(id => +id.slice(1)), eids = S.effects.map(e => +e.id.slice(1));
     nextId = Math.max(nextId, ...ids, ...eids) + 1;
+    if (old.length) {
+      const msg = `지원하지 않는 예전 레시피(pxf.graph@1) ${old.length}개: ${old.join(', ')}. 빈 이펙트로 남겨 두었습니다. ④에서 지우고 갤러리의 레시피나 sa-fx@1 형식으로 다시 만들어 주세요.`;
+      status(msg);
+      alert(msg);
+    }
   }
 
   function saveProject() {

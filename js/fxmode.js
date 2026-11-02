@@ -12,7 +12,7 @@ const FXMODE = (() => {
 
   // the effect being edited
   const E = {
-    name: '베기 궤적', recipe: clone(PXF_STARTERS.slash), size: 64, hue: 0, speed: 1,
+    name: '베기 궤적', recipe: SAFX_LIB.byKey('slash'), size: 64, hue: 0, speed: 1,
     blend: 'add', impactFrame: -1, impactHold: 0, loop: null, slash: {},
   };
   let out = null;            // last render: { frames, durations, N, fps, F, loop, game, warnings }
@@ -22,15 +22,15 @@ const FXMODE = (() => {
   // ---------- render ----------
   /** The recipe as rendered: slash controls applied (recipes that draw with Arc), loop override. */
   function graphOf(e) {
-    let g = e.slash && Object.keys(e.slash).length && PXF_SLASH.hasArc(e.recipe) ? PXF_SLASH.apply(e.recipe, e.slash) : clone(e.recipe);
-    if (e.loop !== null) g.settings = { ...g.settings, loop: e.loop };
+    const g = e.slash && Object.keys(e.slash).length && SAFX_LIB.hasSlash(e.recipe) ? SAFX_LIB.apply(e.recipe, e.slash) : clone(e.recipe);
+    if (e.loop !== null) g.loop = e.loop;
     return g;
   }
 
   /** Render an effect at its canvas size; durations with the impact hold; impactFrame resolved. */
   function renderFx(e) {
-    const g = graphOf(e), base = g.settings?.size || 64;
-    const r = PXF.render(g, { scale: e.size / base, hue: e.hue, speed: e.speed });
+    const g = graphOf(e), base = g.size || 64;
+    const r = SAFX.render(g, { scale: e.size / base, hue: e.hue, speed: e.speed });
     // exact canvas size (render rounds size x scale): crop / pad centred
     const frames = r.frames.map(c => {
       if (c.width === e.size) return c;
@@ -47,7 +47,7 @@ const FXMODE = (() => {
   /** The impact frame: set by hand, else the recipe's game.impactFrame, else the frame with the most pixels. */
   function impactOf(e, r, frames) {
     if (e.impactFrame >= 0) return Math.min(e.impactFrame, frames.length - 1);
-    if (Number.isInteger(r.game?.impactFrame)) return Math.min(r.game.impactFrame, frames.length - 1);
+    if (Number.isInteger(e.recipe.impactFrame)) return Math.min(r.game.impactFrame, frames.length - 1);
     let best = 0, most = -1;
     frames.forEach((c, i) => {
       const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
@@ -60,10 +60,11 @@ const FXMODE = (() => {
 
   function rerender() {
     clearTimeout(renderTimer);
-    renderTimer = setTimeout(() => {
+    renderTimer = setTimeout(async () => {
       try {
+        await SAFX.preload(E.recipe);
         out = renderFx(E);
-        $('fxmErr').textContent = out.warnings.length ? `아직 그리지 않는 노드: ${out.warnings.join(', ')}` : '';
+        $('fxmErr').textContent = out.warnings.join(' · ');
       } catch (err) {
         $('fxmErr').textContent = String(err.message || err);
         return;
@@ -167,7 +168,7 @@ const FXMODE = (() => {
     E.recipe = clone(recipe);
     E.name = name || recipe.name || '이펙트';
     E.impactFrame = -1; E.loop = null; E.slash = {};
-    if (recipe.game?.blend && BLENDS[recipe.game.blend]) E.blend = recipe.game.blend;
+    if (BLENDS[recipe.blend]) E.blend = recipe.blend;
     syncInputs();
     rerender();
   }
@@ -182,7 +183,7 @@ const FXMODE = (() => {
     $('fxmImpact').value = E.impactFrame;
     $('fxmHold').value = E.impactHold;
     $('fxmLoop').value = E.loop === null ? '' : String(E.loop);
-    const arc = PXF_SLASH.hasArc(E.recipe);
+    const arc = SAFX_LIB.hasSlash(E.recipe);
     $('fxmSlash').hidden = !arc;
     if (arc) {
       const s = E.slash;
@@ -196,10 +197,7 @@ const FXMODE = (() => {
 
   // ---------- gallery ----------
   function gallerySources() {
-    const src = [];
-    for (const k of PXF_SLASH.RECIPE_ORDER) src.push({ label: PXF_SLASH.RECIPE_LABELS[k], get: () => PXF_SLASH.recipe(k) });
-    for (const g of Object.values(PXF_STARTERS)) src.push({ label: g.name, get: () => clone(g) });
-    return src;
+    return SAFX_LIB.all();
   }
 
   function buildGallery() {
@@ -208,7 +206,7 @@ const FXMODE = (() => {
     for (const s of gallerySources()) {
       const d = document.createElement('div'), c = document.createElement('canvas'), t = document.createElement('div');
       d.className = 'galcard'; t.textContent = s.label; c.width = c.height = 48;
-      try { thumbs.push({ c, frames: PXF.render(s.get(), { scale: 0.75 }).frames }); } catch { t.textContent += ' (오류)'; }
+      try { thumbs.push({ c, frames: SAFX.render(s.get(), { scale: 0.75 }).frames }); } catch { t.textContent += ' (오류)'; }
       d.onclick = () => loadRecipe(s.get(), s.label);
       d.append(c, t);
       grid.append(d);
@@ -254,7 +252,7 @@ const FXMODE = (() => {
       loop: !!r.loop, impactFrame: r.impact, impactMs: r.durations.slice(0, r.impact).reduce((a, b) => a + b, 0),
       blend: e.blend, pivot: { x: r.N / 2, y: r.N / 2 },
       frames: r.frames.map((_, i) => ({ index: i, x: i * r.N, y: 0, w: r.N, h: r.N, duration: r.durations[i] })),
-      source: { format: 'pxf.graph@1', recipe: graphOf(e), size: e.size, hue: e.hue, speed: e.speed, impactHold: e.impactHold },
+      source: { format: 'sa-fx@1', recipe: graphOf(e), size: e.size, hue: e.hue, speed: e.speed, impactHold: e.impactHold },
     };
   }
 
@@ -276,7 +274,10 @@ const FXMODE = (() => {
     const items = pick.length ? pick : list;
     if (!items.length) return status('목록이 비어 있어요. "목록에 추가"로 이펙트를 담으세요.');
     const files = [], index = [], used = new Set();
-    for (const e of items) {
+    const old = items.filter(e => SAFX.unsupported(e.recipe)), ok = items.filter(x => !SAFX.unsupported(x.recipe));
+    const skipped = old.length ? ` · 예전 pxf 레시피 ${old.length}개(${old.map(e => e.name).join(', ')})는 지원하지 않아 뺐어요. sa-fx@1로 다시 만들어 주세요` : '';
+    if (!ok.length) return status('내보낼 이펙트가 없어요' + skipped);
+    for (const e of ok) {
       let r;
       try { r = renderFx(e); } catch (err) { status(`${e.name}: ${err.message || err}`); return; }
       let file = safeName(e.name), n = 2;
@@ -290,7 +291,7 @@ const FXMODE = (() => {
     files.push({ name: 'effects.json', data: utf8(JSON.stringify({ effects: index }, null, 2)) });
     const zipName = `${safeName($('name')?.value || 'effects')}_effects.zip`;
     download(new Blob([zip(files)], { type: 'application/zip' }), zipName);
-    status(`${items.length}개 이펙트를 ${zipName}로 내보냈어요 (시트 PNG + 메타 JSON + effects.json)`);
+    status(`${ok.length}개 이펙트를 ${zipName}로 내보냈어요 (시트 PNG + 메타 JSON + effects.json)${skipped}`);
   }
 
   // minimal .zip writer (stored, no compression)
@@ -326,8 +327,9 @@ const FXMODE = (() => {
     if (!list.length) { el.innerHTML = '<p class="hint">아직 없어요. 만든 이펙트를 "목록에 추가"로 담아 두면 한꺼번에 내보낼 수 있어요.</p>'; return; }
     list.forEach((x, i) => {
       const r = document.createElement('div');
+      const old = SAFX.unsupported(x.recipe);
       r.className = 'fxrow';
-      r.innerHTML = `<label class="chk"><input type="checkbox" ${x.on ? 'checked' : ''}> ${x.name} <span class="dim">${x.size}px · ${x.blend}</span></label><span><button class="sm" title="불러와서 고치기">열기</button> <button class="sm" title="목록에서 빼기">✕</button></span>`;
+      r.innerHTML = `<label class="chk"><input type="checkbox" ${x.on && !old ? 'checked' : ''} ${old ? 'disabled' : ''}> ${x.name} <span class="${old ? 'bad' : 'dim'}">${old ? '지원 안 함 (예전 pxf): 다시 만들어 주세요' : `${x.size}px · ${x.blend}`}</span></label><span><button class="sm" title="불러와서 고치기" ${old ? 'disabled' : ''}>열기</button> <button class="sm" title="목록에서 빼기">✕</button></span>`;
       const [chk] = r.getElementsByTagName('input'), [open, del] = r.getElementsByTagName('button');
       chk.onchange = () => { x.on = chk.checked; saveList(); };
       open.onclick = () => { Object.assign(E, clone(x)); delete E.on; syncInputs(); rerender(); status(`"${x.name}"을(를) 불러왔어요. 고친 뒤 다시 "목록에 추가"하면 같은 이름이 바뀝니다.`); };
@@ -365,9 +367,9 @@ const FXMODE = (() => {
       b.onclick = () => { E.size = n; syncInputs(); rerender(); };
       sizes.append(b);
     }
-    for (const [k, label] of Object.entries(PXF_SLASH.SHAPES)) $('fxmShape').append(new Option(label, k));
+    for (const [k, label] of Object.entries(SAFX_LIB.SHAPES)) $('fxmShape').append(new Option(label, k));
     $('fxmTheme').append(new Option('레시피 그대로', ''));
-    for (const [k, t] of Object.entries(PXF_SLASH.THEMES)) $('fxmTheme').append(new Option(t.label, k));
+    for (const [k, t] of Object.entries(SAFX_LIB.THEMES)) $('fxmTheme').append(new Option(t.label, k));
 
     const num = (id, key, after) => {
       const r = $(id), v = $(id + 'V');
@@ -390,17 +392,21 @@ const FXMODE = (() => {
     }
     $('fxmSlashReset').onclick = () => { E.slash = {}; syncInputs(); rerender(); };
     $('fxmJson').oninput = () => {
-      try { E.recipe = JSON.parse($('fxmJson').value); $('fxmErr').textContent = ''; $('fxmSlash').hidden = !PXF_SLASH.hasArc(E.recipe); rerender(); }
+      try { E.recipe = JSON.parse($('fxmJson').value); $('fxmErr').textContent = ''; $('fxmSlash').hidden = !SAFX_LIB.hasSlash(E.recipe); rerender(); }
       catch (err) { $('fxmErr').textContent = 'JSON 오류: ' + err.message; }
     };
     $('fxmFile').onchange = async ev => {
       const f = ev.target.files[0];
       ev.target.value = '';
       if (!f) return;
-      try { const g = JSON.parse(await f.text()); loadRecipe(g, g.name || f.name.replace(/\.(pxf\.)?json$/i, '')); }
+      try {
+        const g = JSON.parse(await f.text());
+        if (SAFX.unsupported(g)) { $('fxmErr').textContent = '예전 pxf.graph@1 레시피는 지원하지 않습니다. 갤러리의 레시피나 sa-fx@1 형식(docs/fx-format.md)으로 다시 만들어 주세요.'; return; }
+        loadRecipe(g, g.name || f.name.replace(/\.(safx\.)?json$/i, ''));
+      }
       catch (err) { $('fxmErr').textContent = '레시피를 읽지 못했어요: ' + err.message; }
     };
-    $('fxmSaveRecipe').onclick = () => download(new Blob([JSON.stringify(graphOf(E), null, 2)], { type: 'application/json' }), `${safeName(E.name)}.pxf.json`);
+    $('fxmSaveRecipe').onclick = () => download(new Blob([JSON.stringify(graphOf(E), null, 2)], { type: 'application/json' }), `${safeName(E.name)}.safx.json`);
     $('fxmPlay').onclick = () => { playing = !playing; syncPlay(); play(); };
     $('fxmPrev').onclick = () => { if (!out) return; playing = false; syncPlay(); cur = (cur + out.frames.length - 1) % out.frames.length; draw(); };
     $('fxmNext').onclick = () => { if (!out) return; playing = false; syncPlay(); cur = (cur + 1) % out.frames.length; draw(); };

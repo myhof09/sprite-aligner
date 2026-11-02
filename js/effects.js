@@ -84,7 +84,7 @@ const FX = (() => {
 
   /**
    * Cut a sheet into frames. Understands (in this order): frames[] with {x,y,w,h} or {frame:{x,y,w,h}}
-   * (this tool, pxf-studio, Aseprite/TexturePacker arrays), frames{} maps (Aseprite hash), or
+   * (this tool, Aseprite/TexturePacker arrays), frames{} maps (Aseprite hash), or
    * frameWidth/frameHeight (+frameCount). Without meta: `count` equal frames in a row (1 = single image).
    */
   function fromSheet(img, meta, name, count = 1) {
