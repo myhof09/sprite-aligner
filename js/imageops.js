@@ -552,6 +552,31 @@ const IO = (() => {
     return { bx: xs[xs.length >> 1] + 0.5, by: y1 + 1 };
   }
 
+  /**
+   * Head / torso anchor of the main body, for run and walk cycles: legs, arms and weapons are left out. In the upper 55%
+   * of the body only the thick columns count (at least half as many pixels as the thickest one: the head and torso,
+   * not a fist or a scabbard sticking out); tx / ty = their centre. by = the feet (bottom of the body), as bodyAnchor.
+   */
+  function torsoAnchor(img) {
+    const body = groups(mapFromImg(img))[0];
+    if (!body) return { tx: img.w / 2, ty: img.h / 2, by: img.h };
+    let y0 = Infinity, y1 = -Infinity;
+    for (const k of body) { const y = KY(k); if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    const cut = y0 + (y1 - y0 + 1) * 0.55, cols = new Map();
+    for (const k of body) {
+      const y = KY(k);
+      if (y >= cut) continue;
+      const x = KX(k);
+      if (!cols.has(x)) cols.set(x, []);
+      cols.get(x).push(y);
+    }
+    let max = 0;
+    for (const ys of cols.values()) max = Math.max(max, ys.length);
+    let sx = 0, sy = 0, n = 0;
+    for (const [x, ys] of cols) if (ys.length >= max * 0.5) for (const y of ys) { sx += x; sy += y; n++; }
+    return n ? { tx: sx / n + 0.5, ty: sy / n + 0.5, by: y1 + 1 } : { tx: img.w / 2, ty: img.h / 2, by: y1 + 1 };
+  }
+
   /** Magic wand: keys connected (4-neighbour) to `start` whose colour is within tol (RGB distance) of it. */
   function wand(m, start, tol) {
     const c0 = m.get(start);
@@ -606,5 +631,5 @@ const IO = (() => {
 
   return { guessKey, keyMask, despill, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
-           K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, wand };
+           K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, torsoAnchor, wand };
 })();

@@ -26,6 +26,7 @@
     impact: 0, impactPoint: null,
     flipView: false, gameView: false, tile: 62, gameScale: 1,
     scope: 'cur', toFx: false, wandTol: 40, islandMax: 2000,
+    alignBy: 'auto',   // auto-align: 'auto' (torso for run / walk cycles by name, else feet), 'torso', 'feet'
     gifScale: 4, gifBg: '#3a3e46', gifTransparent: false, exportLeft: false, batchAutoPixel: true,
     paintColor: '#ffffff',
     perFramePixel: false, head: null,   // head: { x, y, w, h (source px), frame } reference for size matching
@@ -228,6 +229,7 @@
     f.img = r.img; f.x0 = r.x0; f.y0 = r.y0;
     f.canvas = toCanvas(f.img);
     f.anchor = IO.bodyAnchor(f.img);
+    f.torso = IO.torsoAnchor(f.img);
     const q = IO.imgFromMap(f.fx);
     f.fxImg = q && q.img; f.fx0 = q ? q.x0 : 0; f.fy0 = q ? q.y0 : 0;
     f.fxCanvas = q ? toCanvas(q.img) : null;
@@ -254,11 +256,30 @@
   function recomposeAll() { S.frames.forEach(compose); render(); }
 
   // ---------- cell & placement ----------
+  // ---------- auto-align modes ----------
+  // feet: feet on the baseline, the legs' centre on the centre line (attacks, idles: the feet stay planted).
+  // torso (몸통 기준): the head / torso centre on the centre line, legs / arms / weapons ignored, so a run or walk cycle
+  // does not slide sideways with the stride; feet on the baseline, plus the jump height the source was drawn with
+  // (frames drawn higher than the others on the source's ground keep that height: jumps are not flattened).
+  const CYCLE = /run|walk|jog|dash|sprint|달리|걷|뛰/i;
+  const alignMode = () => (S.alignBy === 'auto' ? (CYCLE.test(S.name) ? 'torso' : 'feet') : S.alignBy);
+  const anchorX = f => (alignMode() === 'torso' && f.torso ? f.torso.tx : f.anchor.bx);
+
+  /** Torso mode: each frame's feet above the source's ground line (art px; 0 = on the ground). */
+  function sourceLift(f) {
+    if (alignMode() !== 'torso' || !f.box) return 0;
+    const feet = g => g.box.y + (g.y0 + g.anchor.by) * pixelOf(g);
+    const ground = Math.max(...S.frames.filter(g => g.box && g.anchor).map(feet));
+    const tall = Math.max(...S.frames.map(g => g.anchor ? g.anchor.by : 0));
+    const lift = (ground - feet(f)) / pixelOf(f);
+    return lift >= 2 ? Math.min(Math.round(lift), Math.round(tall * 0.35)) : 0;   // (under 2 px: noise; capped)
+  }
+
   /** Cell big enough for every frame aligned on its anchor (+ padding); guides: feet line, centre line. */
   function autoCell() {
     if (!S.frames.length) return;
-    const L = Math.ceil(Math.max(...S.frames.map(f => f.anchor.bx))), R = Math.ceil(Math.max(...S.frames.map(f => f.img.w - f.anchor.bx)));
-    const U = Math.max(...S.frames.map(f => f.anchor.by)), D = Math.max(...S.frames.map(f => f.img.h - f.anchor.by));
+    const L = Math.ceil(Math.max(...S.frames.map(anchorX))), R = Math.ceil(Math.max(...S.frames.map(f => f.img.w - anchorX(f))));
+    const U = Math.max(...S.frames.map(f => f.anchor.by + sourceLift(f))), D = Math.max(...S.frames.map(f => f.img.h - f.anchor.by));
     S.cellW = L + R + 2 * S.pad; S.cellH = U + D + 2 * S.pad;
     S.guides = { base: S.pad + U, top: S.pad, weapon: Math.round(S.cellH * 0.45), cx: S.pad + L };
     S.frames.forEach(autoPlace);
@@ -278,10 +299,10 @@
     }
   }
 
-  /** Auto-align suggestion: feet of the main body on the baseline, body centre (legs) on the centre line. */
+  /** Auto-align suggestion: feet on the baseline; the legs' centre (feet mode) or the head / torso centre (torso mode) on the centre line. */
   function autoPlace(f) {
-    f.ox = Math.round(S.guides.cx - f.anchor.bx) - f.x0;
-    f.oy = S.guides.base - f.anchor.by - f.y0;
+    f.ox = Math.round(S.guides.cx - anchorX(f)) - f.x0;
+    f.oy = S.guides.base - f.anchor.by - sourceLift(f) - f.y0;
     f.placed = true;
   }
 
@@ -1229,6 +1250,7 @@
   function syncInputs() {
     for (const k of NUM_INPUTS) $(k).value = S[k];
     for (const k of CHECKS) $(k).checked = S[k];
+    $('alignBy').value = S.alignBy;
     $('name').value = S.name; $('keyColor').value = rgbToHex(S.key); $('gifBg').value = S.gifBg;
     $('outlineColor').value = S.outlineColor; $('paintColor').value = S.paintColor; $('scope').value = S.scope;
     $('compareMode').value = S.compareMode; $('effectsMode').value = S.effectsMode;
@@ -1318,7 +1340,15 @@
     $('btnDetect').onclick = async () => { if (!src) return; status('프레임 찾는 중…'); await tick(); detect(false); status(`프레임 ${S.frames.length}개`); };
     $('btnPixel').onclick = async () => { if (!src) return; status('AI 픽셀 크기 찾는 중…'); await tick(); detectPixel(); reprocess(false); };
     $('btnAutoCell').onclick = () => { pushUndo(); autoCell(); render(); };
-    $('btnAutoPlace').onclick = () => { pushUndo(); S.frames.forEach(autoPlace); render(); status('자동 정렬: 발은 발 선, 몸 중심은 중심선에 맞췄습니다.'); };
+    $('btnAutoPlace').onclick = () => {
+      pushUndo();
+      const torso = alignMode() === 'torso';
+      if (torso) autoCell(); else S.frames.forEach(autoPlace);   // (torso: the cell may need to grow sideways / up)
+      render();
+      status(torso ? '자동 정렬 (몸통 기준): 머리·몸통 중심은 중심선, 발은 발 선에 맞췄습니다. 원본에서 떠 있던 프레임은 그 높이를 지킵니다.'
+        : '자동 정렬 (발 기준): 발은 발 선, 몸 중심은 중심선에 맞췄습니다.');
+    };
+    $('alignBy').onchange = () => { S.alignBy = $('alignBy').value; };
     $('btnMerge').onclick = mergeSelected;
     $('btnDelete').onclick = () => deleteFrames(boxSel.size ? [...boxSel] : [cur]);
     document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
