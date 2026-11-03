@@ -34,6 +34,7 @@
     <h2 class="stepHead">② 자동 정리</h2>
     <div class="stepBody">
       <button id="btnAuto" class="big" title="배경 제거 + 프레임 찾기 + AI 픽셀 크기 맞추기를 기본값으로 한 번에">✨ 자동 정리</button>
+      <label class="chk" title="부드럽게 칠한 그림(가짜 픽셀아트가 아닌 그림)용: 픽셀 크기 찾기·팔레트·외톨이 픽셀 정리를 하지 않고, 가장자리는 부드럽게(배경색을 빼고 반투명으로) 남기고, 크기는 고품질로 부드럽게 줄입니다. 배경 제거·정렬·내보내기는 그대로"><input id="smooth" type="checkbox"> 부드러운 그림 (픽셀 처리 안 함)</label>
       <label class="chk" title="원본 창에 배경을 지운 결과를 보여 줍니다"><input id="showKeyed" type="checkbox" checked> 원본 창에 배경 지운 모습 보기</label>
       <label class="chk" title="그림 가장자리에서 이어진 배경만 지웁니다. 캐릭터 안의 같은 색(검은 바지 등)은 남습니다. 끄면 배경 색과 비슷한 모든 픽셀을 지웁니다"><input id="keyEdge" type="checkbox"> 가장자리에서 연결된 배경만 지우기</label>
       <div id="keyPending" class="keypending" hidden>
@@ -52,14 +53,14 @@
         <h3>프레임</h3>
         <div class="row slider"><label title="몸체로 볼 최소 크기(가장 큰 덩어리 대비). 낮추면 작은 그림도 프레임이 됩니다">프레임 찾기 민감도</label><input id="bodyFrac" type="range" min="0.05" max="0.8" step="0.05"><output for="bodyFrac"></output></div>
         <button id="btnDetect" class="sm wide" title="박스를 지우고 프레임만 다시 찾습니다">프레임만 다시 찾기</button>
-        <h3>픽셀</h3>
-        <div class="row"><label title="AI 그림에서 픽셀 한 칸이 원본 몇 px인지 (가짜 픽셀 크기)">AI 픽셀 크기</label><input id="pixel" type="number" min="1" max="20" step="0.01"><button id="btnPixel" class="sm" title="다시 자동 감지">자동</button></div>
-        <div class="row chips" id="pixelCands" title="다른 후보. 눌러서 바로 비교"></div>
-        <div class="row"><label title="팔레트 색 수. 0이면 색 정리를 끕니다">색 수</label><input id="colors" type="number" min="0" max="256" step="1"></div>
-        <label class="chk" title="AI가 프레임마다 조금씩 다른 크기로 그렸을 때: 프레임마다 AI 픽셀 크기를 따로 찾아 같은 크기로 맞춥니다 (전체값 ±20% 안에서)"><input id="perFramePixel" type="checkbox"> 프레임마다 AI 픽셀 크기 따로</label>
-        <label class="chk" title="모든 프레임이 같은 팔레트를 쓰게 해 프레임마다 색이 깜빡이는 것을 막습니다"><input id="sharedPalette" type="checkbox"> 팔레트 통일 (모든 프레임)</label>
-        <label class="chk" title="주변에 붙은 픽셀이 거의 없는 가장자리 1px 점을 지웁니다"><input id="lone" type="checkbox"> 외톨이 픽셀 정리</label>
-        <div class="row"><label class="chk" title="몸 바깥 둘레 1px을 한 색으로 다시 그립니다"><input id="outline" type="checkbox"> 1px 외곽선 다시 그리기</label><input id="outlineColor" type="color" title="외곽선 색 (켤 때 가장 어두운 색으로 자동 설정)"></div>
+        <h3 id="pixelHead">픽셀</h3>
+        <div class="row"><label id="pixelLabel" title="AI 그림에서 픽셀 한 칸이 원본 몇 px인지 (가짜 픽셀 크기). 부드러운 그림에서는 축소 배율: 원본 몇 px가 1px이 되는지 (1 = 원래 크기)">AI 픽셀 크기</label><input id="pixel" type="number" min="1" max="20" step="0.01"><button id="btnPixel" class="sm pixelOnly" title="다시 자동 감지">자동</button></div>
+        <div class="row chips pixelOnly" id="pixelCands" title="다른 후보. 눌러서 바로 비교"></div>
+        <div class="row pixelOnly"><label title="팔레트 색 수. 0이면 색 정리를 끕니다">색 수</label><input id="colors" type="number" min="0" max="256" step="1"></div>
+        <label class="chk pixelOnly" title="AI가 프레임마다 조금씩 다른 크기로 그렸을 때: 프레임마다 AI 픽셀 크기를 따로 찾아 같은 크기로 맞춥니다 (전체값 ±20% 안에서)"><input id="perFramePixel" type="checkbox"> 프레임마다 AI 픽셀 크기 따로</label>
+        <label class="chk pixelOnly" title="모든 프레임이 같은 팔레트를 쓰게 해 프레임마다 색이 깜빡이는 것을 막습니다"><input id="sharedPalette" type="checkbox"> 팔레트 통일 (모든 프레임)</label>
+        <label class="chk pixelOnly" title="주변에 붙은 픽셀이 거의 없는 가장자리 1px 점을 지웁니다"><input id="lone" type="checkbox"> 외톨이 픽셀 정리</label>
+        <div class="row pixelOnly"><label class="chk" title="몸 바깥 둘레 1px을 한 색으로 다시 그립니다"><input id="outline" type="checkbox"> 1px 외곽선 다시 그리기</label><input id="outlineColor" type="color" title="외곽선 색 (켤 때 가장 어두운 색으로 자동 설정)"></div>
         <h3>프레임 크기</h3>
         <div class="row"><label title="내보낼 한 칸의 크기 (셀)">프레임 크기</label><input id="cellW" type="number" min="1" max="1024"><span>×</span><input id="cellH" type="number" min="1" max="1024"></div>
         <div class="row"><label title="그림 둘레 빈칸">여백</label><input id="pad" type="number" min="0" max="64"><button id="btnAutoCell" class="sm" title="가장 큰 프레임에 맞춰 칸 크기와 가이드를 다시 잡습니다">크기 자동</button></div>

@@ -19,6 +19,7 @@
     key: [40, 250, 34], tol: 90, edge: 70, despill: 1,
     keyEdge: true, keyBorders: true, keyMarks: true,   // background: only what touches the image edge; panel lines; corner watermarks
     bodyFrac: 0.2, minPiece: 8,
+    smooth: false,   // 부드러운 그림: soft-painted art, no pixel processing (soft key edge, smooth scaling, no palette)
     pixel: 4, colors: 24, sharedPalette: true, lone: false, outline: false, outlineColor: '#1c1830',
     cellW: 64, cellH: 64, pad: 2,
     guides: { base: 60, top: 4, weapon: 30, cx: 32 },
@@ -132,7 +133,7 @@
     status('배경 제거 · 프레임 찾기 · 픽셀 맞추기…'); await tick();
     rekey();
     detect(autoPixel);
-    status(`자동 정리 완료: 프레임 ${S.frames.length}개 · AI 픽셀 ${S.pixel}px · 프레임 크기 ${S.cellW}×${S.cellH}. ③에서 다듬으세요.`);
+    status(`자동 정리 완료: 프레임 ${S.frames.length}개 · ${S.smooth ? `부드러운 그림 (축소 ÷${S.pixel})` : `AI 픽셀 ${S.pixel}px`} · 프레임 크기 ${S.cellW}×${S.cellH}. ③에서 다듬으세요.`);
   }
 
   // ---------- pipeline ----------
@@ -141,9 +142,10 @@
     keyPreview = null;
     showKeyPending();
     keyed = IO.despill(src, mask, S.key, S.despill);
+    if (S.smooth) keyed = IO.softKey(keyed, mask, S.key, S.tol);   // soft, un-mixed edge (alpha in keyed)
     ({ labels, comps } = IO.components(mask, src.w, src.h));
     const view = { w: src.w, h: src.h, data: new Uint8ClampedArray(keyed.data) };
-    for (let p = 0; p < mask.length; p++) view.data[p * 4 + 3] = mask[p] ? 255 : 0;   // hard alpha
+    if (!S.smooth) for (let p = 0; p < mask.length; p++) view.data[p * 4 + 3] = mask[p] ? 255 : 0;   // hard alpha
     keyedCanvas = toCanvas(view);
   }
 
@@ -155,8 +157,8 @@
     S.frames = boxes.map((box, i) => newFrame(box, false, old[i] ? old[i].dur : 100));
     boxSel.clear(); selection.clear(); cur = 0;
     undoStack.length = redoStack.length = 0;
-    if (autoPixel) detectPixel();
-    if (S.perFramePixel) detectFramePixels();
+    if (autoPixel && !S.smooth) detectPixel();   // smooth art: no fake-pixel grid to find, the scale stays as set
+    if (S.perFramePixel && !S.smooth) detectFramePixels();
     S.frames.forEach(prepFrame);
     applyPalettes();
     autoCell();
@@ -193,8 +195,9 @@
   /** AI pixel size used for a frame: manual override → per-frame auto (if on) → global. */
   const pixelOf = f => f.pixel || (S.perFramePixel && f.autoPixel) || S.pixel;
 
-  /** Downscale + lone-pixel cleanup (no palette yet). */
+  /** Downscale + lone-pixel cleanup (no palette yet). Smooth art: plain high-quality scaling by 1/pixel. */
   function prepFrame(f) {
+    if (S.smooth) { f.pre = IO.smoothScale(keyed, ownerTest(f), f.box, pixelOf(f)); return; }
     f.pre = IO.downscale(keyed, ownerTest(f), f.box, pixelOf(f));
     if (S.lone) IO.removeLonePixels(f.pre);
   }
@@ -205,11 +208,12 @@
    * longer line up and are dropped.
    */
   function applyPalettes() {
-    const shared = S.colors > 0 && S.sharedPalette ? IO.dominantPalette(S.frames.map(f => f.pre), S.colors) : null;
+    const pal = S.colors > 0 && !S.smooth;   // smooth art keeps its colours
+    const shared = pal && S.sharedPalette ? IO.dominantPalette(S.frames.map(f => f.pre), S.colors) : null;
     let lost = 0;
     for (const f of S.frames) {
       const base = { ...f.pre, data: new Uint8ClampedArray(f.pre.data) };
-      if (S.colors > 0) IO.snapToPalette(base, shared || IO.dominantPalette([f.pre], S.colors));
+      if (pal) IO.snapToPalette(base, shared || IO.dominantPalette([f.pre], S.colors));
       if (f.base && (f.base.w !== base.w || f.base.h !== base.h)) {
         if (f.edits.size || f.fx.size) lost++;
         f.edits.clear(); f.fx.clear(); f.placed = false;
@@ -242,7 +246,7 @@
     if (rekeyToo) rekey();
     S.frames.forEach(prepFrame);
     repalette();
-    status(`프레임 ${S.frames.length}개 · AI 픽셀 ${S.pixel}px`);
+    status(`프레임 ${S.frames.length}개 · ${S.smooth ? `부드러운 그림 (축소 ÷${S.pixel})` : `AI 픽셀 ${S.pixel}px`}`);
   }
 
   function repalette() {
@@ -1081,7 +1085,7 @@
     if (cv.width !== W) cv.width = W;
     if (cv.height !== H) cv.height = H;
     const g = cv.getContext('2d');
-    g.imageSmoothingEnabled = false;
+    g.imageSmoothingEnabled = S.smooth;   // smooth art previews smoothly scaled
     checker(g, W, H, Math.max(8, z * 4));
     g.drawImage(cellCanvas(i, { flip: S.flipView }), 0, 0, W, H);
     if (S.grid) drawGrid(g, z, S.cellW, S.cellH);
@@ -1096,7 +1100,7 @@
     const T = S.tile, z = S.pzoom, cols = 5, rows = 3, W = cols * T, H = rows * T, cv = $('preview');
     cv.width = W * z; cv.height = H * z;
     const g = cv.getContext('2d');
-    g.imageSmoothingEnabled = false;
+    g.imageSmoothingEnabled = S.smooth;
     g.save(); g.scale(z, z);
     if (bgImg) { g.fillStyle = g.createPattern(bgImg, 'repeat'); g.fillRect(0, 0, W, H); }
     else for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { g.fillStyle = (r + c) % 2 ? '#3d5a3a' : '#456842'; g.fillRect(c * T, r * T, T, T); }
@@ -1246,7 +1250,7 @@
     'gifScale', 'tile', 'gameScale', 'wandTol', 'islandMax'];
   const INTS = ['cellW', 'cellH', 'zoom', 'pzoom', 'gifScale', 'pad', 'colors', 'tile', 'wandTol', 'islandMax'];
   const CHECKS = ['snap', 'onion', 'grid', 'loop', 'lone', 'sharedPalette', 'outline', 'gifTransparent', 'flipView', 'gameView',
-    'toFx', 'exportLeft', 'batchAutoPixel', 'perFramePixel', 'showEffects', 'keyEdge', 'keyBorders', 'keyMarks'];
+    'toFx', 'exportLeft', 'batchAutoPixel', 'perFramePixel', 'showEffects', 'keyEdge', 'keyBorders', 'keyMarks', 'smooth'];
 
   function syncInputs() {
     for (const k of NUM_INPUTS) $(k).value = S[k];
@@ -1256,7 +1260,12 @@
     $('outlineColor').value = S.outlineColor; $('paintColor').value = S.paintColor; $('scope').value = S.scope;
     $('compareMode').value = S.compareMode; $('effectsMode').value = S.effectsMode;
     document.querySelectorAll('output').forEach(o => { o.textContent = $(o.htmlFor.value).value; });
+    // smooth art: the pixel size is just a scale; the pixel-art-only settings are hidden
+    $('pixelLabel').textContent = S.smooth ? '축소 (원본 px ÷)' : 'AI 픽셀 크기';
+    $('pixelHead').textContent = S.smooth ? '크기' : '픽셀';
+    document.querySelectorAll('.pixelOnly').forEach(el => { el.hidden = S.smooth; });
     $('pixelCands').innerHTML = '';
+    if (S.smooth) return;
     pixelCands.forEach(c => {
       const b = document.createElement('button');
       b.className = Math.abs(c.p - S.pixel) < 1e-6 ? 'on' : '';
@@ -1280,6 +1289,7 @@
     const after = {   // what each setting re-runs
       tol: previewKey, edge: previewKey, despill: () => reprocess(true), keyEdge: previewKey, keyBorders: previewKey, keyMarks: previewKey,
       pixel: () => reprocess(false), lone: () => reprocess(false), colors: repalette, sharedPalette: repalette,
+      smooth: () => { if (S.smooth) S.pixel = 1; else if (keyed && S.frames.length) detectPixel(); syncInputs(); reprocess(true); },
       outline: () => { if (S.outline) { S.outlineColor = darkest(); syncInputs(); } recomposeAll(); },
       cellW: render, cellH: render, zoom: drawEditor, pzoom: drawPreview, grid: render, onion: drawEditor,
       flipView: drawPreview, gameView: drawPreview, tile: drawPreview, gameScale: drawPreview,
@@ -1964,7 +1974,7 @@
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
     // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
-    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false }, settings);
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();

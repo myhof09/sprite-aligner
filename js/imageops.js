@@ -217,15 +217,80 @@ const IO = (() => {
    */
   function despill(img, mask, key, strength) {
     const out = { w: img.w, h: img.h, data: new Uint8ClampedArray(img.data) };
+    const lo = Math.min(...key), hot = [0, 1, 2].filter(k => key[k] - lo >= 100);
+    const near = nearBackground(mask, img.w, img.h, 3), d = out.data;
+    if (strength > 0 && hot.length === 2) {
+      // two-channel key (magenta = red + blue, cyan, yellow): pull both down toward the third channel
+      const o = [0, 1, 2].find(k => !hot.includes(k));
+      for (let p = 0; p < mask.length; p++) {
+        if (!mask[p] || !near[p]) continue;
+        const i = p * 4, m = Math.min(d[i + hot[0]], d[i + hot[1]]), lim = d[i + o];
+        if (m > lim) { const s = (m - lim) * strength; d[i + hot[0]] -= s; d[i + hot[1]] -= s; }
+      }
+      return out;
+    }
     const c = key.indexOf(Math.max(...key)), o = [0, 1, 2].filter(k => k !== c);
     if (strength <= 0 || key[c] - Math.max(key[o[0]], key[o[1]]) < 40) return out; // grey/white key: nothing to pull
-    const near = nearBackground(mask, img.w, img.h, 3), d = out.data;
     for (let p = 0; p < mask.length; p++) {
       if (!mask[p] || !near[p]) continue;
       const i = p * 4, lim = Math.max(d[i + o[0]], d[i + o[1]]);
       if (d[i + c] > lim) d[i + c] -= (d[i + c] - lim) * strength;
     }
     return out;
+  }
+
+  /**
+   * Smooth art: soft edge. Foreground pixels within 2px of the background get an alpha from their distance to the
+   * key colour (tol * 0.6 → 0, tol * 2.2 → 1) and the key colour un-mixed from their colour, so a soft-painted
+   * outline keeps its anti-aliasing without a coloured fringe. Everything else is opaque. Returns a copy.
+   */
+  function softKey(img, mask, key, tol) {
+    const out = { w: img.w, h: img.h, data: new Uint8ClampedArray(img.data) }, d = out.data;
+    const near = nearBackground(mask, img.w, img.h, 2), lo = tol * 0.6, hi = tol * 2.2;
+    for (let p = 0; p < mask.length; p++) {
+      const i = p * 4;
+      if (!mask[p]) { d[i + 3] = 0; continue; }
+      if (!near[p]) { d[i + 3] = 255; continue; }
+      const a = Math.max(0.08, Math.min(1, (cdist(img.data, i, key) - lo) / (hi - lo)));
+      for (let c = 0; c < 3; c++) d[i + c] = (img.data[i + c] - (1 - a) * key[c]) / a;
+      d[i + 3] = Math.round(a * 255);
+    }
+    return out;
+  }
+
+  /**
+   * Smooth art: scale one frame by 1/p with the browser's high-quality resampling (premultiplied alpha, so no dark
+   * or key-coloured fringe), no pixel grid, no palette. Same result shape as downscale().
+   */
+  function smoothScale(img, owns, box, p) {
+    const { w, data } = img, { x: x0, y: y0, w: bw, h: bh } = box;
+    const a = document.createElement('canvas');
+    a.width = bw; a.height = bh;
+    const g = a.getContext('2d'), id = g.createImageData(bw, bh);
+    for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {
+      const s = (y0 + y) * w + x0 + x;
+      if (!owns(s)) continue;
+      id.data.set(data.subarray(s * 4, s * 4 + 4), (y * bw + x) * 4);
+    }
+    g.putImageData(id, 0, 0);
+    let c = a, cw = bw, ch = bh;
+    const W = Math.max(1, Math.round(bw / p)), H = Math.max(1, Math.round(bh / p));
+    while (cw / 2 >= W && ch / 2 >= H) {   // halve first: one big drawImage step aliases thin lines
+      const n = document.createElement('canvas');
+      n.width = cw = Math.round(cw / 2); n.height = ch = Math.round(ch / 2);
+      const ng = n.getContext('2d');
+      ng.imageSmoothingQuality = 'high';
+      ng.drawImage(c, 0, 0, cw, ch);
+      c = n;
+    }
+    const o = document.createElement('canvas');
+    o.width = W; o.height = H;
+    const og = o.getContext('2d');
+    og.imageSmoothingQuality = 'high';
+    og.drawImage(c, 0, 0, W, H);
+    const t = trim({ w: W, h: H, data: og.getImageData(0, 0, W, H).data });
+    t.sx = x0 + (t.tx || 0) * (bw / W); t.sy = y0 + (t.ty || 0) * (bh / H); t.p = p;
+    return t;
   }
 
   /** Connected regions (8-neighbour) of the mask. comps[k] has id k+1, area and bounding box. */
@@ -490,12 +555,12 @@ const IO = (() => {
   const K = (x, y) => ((y + 2048) << 12) | (x + 2048);
   const KX = k => (k & 4095) - 2048, KY = k => (k >> 12) - 2048;
 
-  /** Opaque pixels of an image, offset by (x0, y0). */
-  function mapFromImg(img, x0 = 0, y0 = 0) {
+  /** Pixels of an image with alpha >= minA, offset by (x0, y0). Values keep their alpha (soft edges of smooth art). */
+  function mapFromImg(img, x0 = 0, y0 = 0, minA = 1) {
     const m = new Map();
     for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) {
       const i = (y * img.w + x) * 4;
-      if (img.data[i + 3]) m.set(K(x + x0, y + y0), [img.data[i], img.data[i + 1], img.data[i + 2], 255]);
+      if (img.data[i + 3] >= minA) m.set(K(x + x0, y + y0), [img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3]]);
     }
     return m;
   }
@@ -506,7 +571,7 @@ const IO = (() => {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const k of m.keys()) { const x = KX(k), y = KY(k); if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
     const w = x1 - x0 + 1, h = y1 - y0 + 1, data = new Uint8ClampedArray(w * h * 4);
-    for (const [k, c] of m) data.set([c[0], c[1], c[2], 255], ((KY(k) - y0) * w + KX(k) - x0) * 4);
+    for (const [k, c] of m) data.set([c[0], c[1], c[2], c[3] || 255], ((KY(k) - y0) * w + KX(k) - x0) * 4);
     return { img: { w, h, data }, x0, y0 };
   }
 
@@ -543,7 +608,7 @@ const IO = (() => {
    * steadier than a sword-swinging torso or flying hair). Returns {bx, by} in image pixels (pixel boundaries).
    */
   function bodyAnchor(img) {
-    const body = groups(mapFromImg(img))[0];
+    const body = groups(mapFromImg(img, 0, 0, 128))[0];
     if (!body) return { bx: img.w / 2, by: img.h };
     let y0 = Infinity, y1 = -Infinity;
     for (const k of body) { const y = KY(k); if (y < y0) y0 = y; if (y > y1) y1 = y; }
@@ -558,7 +623,7 @@ const IO = (() => {
    * not a fist or a scabbard sticking out); tx / ty = their centre. by = the feet (bottom of the body), as bodyAnchor.
    */
   function torsoAnchor(img) {
-    const body = groups(mapFromImg(img))[0];
+    const body = groups(mapFromImg(img, 0, 0, 128))[0];
     if (!body) return { tx: img.w / 2, ty: img.h / 2, by: img.h };
     let y0 = Infinity, y1 = -Infinity;
     for (const k of body) { const y = KY(k); if (y < y0) y0 = y; if (y > y1) y1 = y; }
@@ -629,7 +694,7 @@ const IO = (() => {
     return { ...best, s: +best.s.toFixed(2), w: Math.round(ref.w * best.s), h: Math.round(ref.h * best.s) };
   }
 
-  return { guessKey, keyMask, despill, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
+  return { guessKey, keyMask, despill, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
            K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, torsoAnchor, wand };
 })();
