@@ -16,7 +16,8 @@
 //        [--anchor-out name=PART --anchor-color #rrggbb [--anchor-box x,y,w,h (cell px)] [--anchor-tol N (40)]
 //             [--anchor-point bbox|mean|extreme|lowest (bbox)]]   (repeatable group: per-frame part anchor -> timing frames[].PART)
 //        [--extract name=PIECE --extract-frame N (0-based) [--extract-at x,y | --extract-box x,y,w,h] [--extract-erase 2,3]
-//             [--extract-file path/without/ext] [--extract-pivot ground|center]]   (repeatable: a piece -> its own PNG + pivot JSON)
+//             [--extract-file path/without/ext] [--extract-pivot ground|center] [--extract-discard (only erase it)]]
+//             (repeatable: a piece -> its own PNG + pivot JSON, or just erased)
 //        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
 //                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
 //
@@ -42,7 +43,7 @@ const nums = v => v.split(',').map(Number);
 const num = n => (opt(n) !== undefined ? +opt(n) : undefined);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
 const videoArg = opt('video') && resolve(opt('video'));
-const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral'].includes(argv[i - 1])));
+const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral', '--extract-discard'].includes(argv[i - 1])));
 if (argv[0] === 'measure') { await measure(); process.exit(0); }
 const specPath = opt('spec') && resolve(opt('spec'));
 const spec = specPath ? JSON.parse(readFileSync(specPath, 'utf8')) : {};
@@ -113,6 +114,7 @@ function extractArgs() {
     else if (a === '--extract-erase') cur.erase = nums(v);
     else if (a === '--extract-file') cur.file = v;
     else if (a === '--extract-pivot') cur.pivot = v;
+    else if (a === '--extract-discard') cur.discard = true;
   }
   return list;
 }

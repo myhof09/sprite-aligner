@@ -2163,7 +2163,8 @@
    *   project (saved project text, instead of image) + pick [frame indices, repeats allowed]; expand [l, t, r, b];
    *   videoFrames [data URLs] + loopPick { pick, steps } (find a seamless walk / run cycle, pick evenly) or pickFrames;
    *   keyTint N (also key pixels with the background's hue, tint >= N);
-   *   erase [{ frame, poly: [[x, y], …] }] and removeIslands { max } (hand edits, kept in the project);
+   *   erase [{ frame, poly: [[x, y], …], minLight }] (minLight: only light pixels, e.g. a pale glow inside the polygon)
+   *     and removeIslands { max } (hand edits, kept in the project);
    *   remap [{ src: '#rrggbb', dst: '#rrggbb', tol }] (shading-preserving colour shift, before scaling);
    *   tipsCount N (+ tipsN overrides): N blade tips per frame -> timing frames[].tips;
    *   tips { frame: {x, y} | at } (blade tip per frame: detected, these override); autoTrail (true | { style, shape, under });
@@ -2173,7 +2174,8 @@
    *   extract [{ name, frame (0-based, default 0), at [x, y] (cell px: the piece there) | box [x, y, w, h] (cell px: the
    *     biggest detached piece inside), erase [frames] (erase the piece's pixels there), minAlpha (40), pivot 'ground' | 'center',
    *     file (output path without .png, relative to out; default name), showFrame (0-based, default frame),
-   *     offsetKey / frameKey (also write the offset / show frame under these top-level timing keys) }]: a separate prop
+   *     offsetKey / frameKey (also write the offset / show frame under these top-level timing keys), discard (only erase it:
+   *     no files, no timing entry; e.g. a glow smudge) }]: a separate prop
    *     (the web tool's "move to FX layer", as a file): <file>.png + <file>.json (pivot, offset from the character pivot);
    *     timing props.<name> = { file, frame, offset }. The piece = its solid pixels (alpha > minAlpha) + the faint rim within
    *     2 px of it that does not touch the body (the frame's biggest piece).
@@ -2462,12 +2464,15 @@
       S.frames.forEach(f => { f.ox += l; f.oy += t; });
     }
     // hand edits through the API (stored as edits, so the project keeps them and they can be undone in the web tool):
-    // erase [{ frame (default all), poly: [[x, y], ...] cell px }], then removeIslands { max (px, default any size) }
+    // erase [{ frame (default all), poly: [[x, y], ...] cell px, minLight (only pixels whose brightest channel >= it) }], then removeIslands { max (px, default any size) }
     for (const er of o.erase || []) {
       const list = er.frame === undefined ? S.frames : [S.frames[er.frame]];
       for (const f of list) {
         if (!f) continue;
-        for (const k of frameMap(f).keys()) if (pointInPoly(f.ox + KX(k) + 0.5, f.oy + KY(k) + 0.5, er.poly)) f.edits.set(k, [0, 0, 0, 0]);
+        for (const [k, c] of frameMap(f)) {
+          if (er.minLight && Math.max(c[0], c[1], c[2]) < er.minLight) continue;   // only light pixels (a pale glow, not the outlines around it)
+          if (pointInPoly(f.ox + KX(k) + 0.5, f.oy + KY(k) + 0.5, er.poly)) f.edits.set(k, [0, 0, 0, 0]);
+        }
         compose(f);
       }
     }
@@ -2539,7 +2544,7 @@
       const gx = (cx0 + cx1 + 1) / 2, gy = ex.pivot === 'center' ? (cy0 + cy1 + 1) / 2 : cy1 + 1;   // from the solid core
       const offset = { x: Math.round(gx - S.guides.cx), y: Math.round(gy - S.guides.base) };
       const file = ex.file || ex.name, showFrame = ex.showFrame ?? fi;
-      props.push({ file, canvas: toCanvas({ w, h, data }), json: { name: ex.name, file: `${file.split('/').pop()}.png`, width: w, height: h,
+      if (!ex.discard) props.push({ file, canvas: toCanvas({ w, h, data }), json: { name: ex.name, file: `${file.split('/').pop()}.png`, width: w, height: h,
         pivot: { x: Math.round(gx - x0), y: Math.round(gy - y0) }, pivotType: ex.pivot || 'ground', cellBox: [x0, y0, w, h], offset,
         source: { animation: S.name, frame: fi } } });
       for (const ei of ex.erase || []) {
@@ -2547,6 +2552,7 @@
         for (const k of piece) { const [x, y] = cellOf(k); g.edits.set(K(x - g.ox, y - g.oy), [0, 0, 0, 0]); }
         compose(g);
       }
+      if (ex.discard) { warnings.push(`extract ${ex.name}: ${piece.size} px discarded from ${(ex.erase || []).join(', ')}`); continue; }
       timingTop = timingTop || {};
       timingTop.props = { ...(timingTop.props || {}), [ex.name]: { file: `${file}.png`, frame: showFrame, offset } };
       if (ex.offsetKey) timingTop[ex.offsetKey] = offset;
