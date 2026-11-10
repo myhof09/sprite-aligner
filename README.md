@@ -44,7 +44,7 @@ npm i -D playwright          # 한 번 (또는 PLAYWRIGHT_DIR=Playwright가 설�
 node tools/cli.mjs attack.png --out out --smooth --all-bg --fringe --pad 16 --align feet      --durations 160,80,60,200,100,140 --impact 3 --no-loop
 ```
 
-옵션: `--name` · `--smooth` (부드러운 그림) · `--shrink N` · `--pixel N` (AI 픽셀 크기, 없으면 감지) · `--key #rrggbb` · `--tol N` · `--all-bg` (가장자리 연결만이 아니라 모든 배경) · `--fringe` · `--despill 0..1` · `--pad N` · `--align auto|feet|torso` · `--durations` · `--impact N|none` · `--no-loop` · `--left` · `--outputs project,all,frames,timing` (기본: 넷 다).
+옵션: `--name` · `--smooth` (부드러운 그림) · `--shrink N` · `--pixel N` (AI 픽셀 크기, 없으면 감지) · `--key #rrggbb` · `--tol N` · `--all-bg` (가장자리 연결만이 아니라 모든 배경) · `--fringe` · `--despill 0..1` · `--pad N` · `--align auto|feet|torso` · `--durations` · `--impact N|none` · `--no-loop` · `--left` · `--outputs project,all,frames,timing` (기본: 넷 다) · `--row N` (여러 줄 시트의 N번째 줄만, 1 = 맨 위; 줄은 빈 가로 틈으로 찾음) · `--frames N` (기대 프레임 수, 다르면 경고) · `--target-height PX` + `--target-frame K` (부드러운 그림: K번째 프레임이 PX 높이가 되도록 한 배율로 맞춤).
 나오는 파일: `이름.sprite-aligner.json`, `이름.png` + `.json` + `_preview.gif` (+ 왼쪽/FX/이펙트 시트), `이름_frame_01.png` …, `이름_timing.json`.
 페이지 안에서는 `window.SpriteAligner.run({...})`로도 부를 수 있습니다(같은 옵션, 파일을 base64로 돌려줌).
 

@@ -2029,14 +2029,63 @@
    *   key ('#rrggbb'; omit = guess), tol, keyEdge (bool), fringe (bool), despill (0-1), pad,
    *   alignBy ('auto' | 'feet' | 'torso'), durations [ms...], impact (frame index, -1 = none), loop (bool), exportLeft (bool),
    *   outputs: any of 'project', 'all' (sheet + meta + GIF ...), 'frames', 'timing' (default: all four).
+   *   row: process only this row (1 = top) of a multi-row sheet; rows are found from the empty horizontal gaps.
+   *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
+   *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
+   *     is exactly targetHeight px tall.
    */
+  /** Crop one row (1 = top) of a multi-row sheet: rows are the bands between empty horizontal gaps. */
+  async function cropRow(url, row, keyHex) {
+    const { canvas, img } = await loadImage(url);
+    const key = keyHex ? hexToRgb(keyHex) : IO.guessKey(img);
+    const m = IO.keyMask(img, key, S.tol, S.edge, { connected: false, borders: true, marks: true });
+    const rowFg = new Array(img.h).fill(0);
+    for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) rowFg[y] += m[y * img.w + x];
+    let bands = [], start = -1;
+    for (let y = 0; y <= img.h; y++) {
+      const on = y < img.h && rowFg[y] >= 3;
+      if (on && start < 0) start = y;
+      if (!on && start >= 0) { bands.push([start, y]); start = -1; }
+    }
+    // merge bands split by tiny gaps (a sword tip, a hair lock), then drop specks
+    bands = bands.reduce((acc, b) => { const l = acc[acc.length - 1]; if (l && b[0] - l[1] < 4) l[1] = b[1]; else acc.push([...b]); return acc; }, []);
+    const tall = Math.max(...bands.map(b => b[1] - b[0]));
+    bands = bands.filter(b => b[1] - b[0] >= tall * 0.25);
+    if (row < 1 || row > bands.length) throw new Error(`row ${row}: the sheet has ${bands.length} rows`);
+    const [y0, y1] = bands[row - 1], prev = bands[row - 2], next = bands[row];
+    const top = prev ? Math.round((prev[1] + y0) / 2) : 0, bottom = next ? Math.round((y1 + next[0]) / 2) : img.h;
+    const c = document.createElement('canvas');
+    c.width = img.w; c.height = bottom - top;
+    c.getContext('2d').drawImage(canvas, 0, -top);
+    return { url: c.toDataURL('image/png'), rows: bands.length, top, bottom };
+  }
+
+  /** Rows with any visible pixel in a frame's sprite. */
+  const spriteHeight = f => { let t = -1, b = -1; for (let y = 0; y < f.img.h; y++) for (let x = 0; x < f.img.w; x++) if (f.img.data[(y * f.img.w + x) * 4 + 3]) { if (t < 0) t = y; b = y; break; } return t < 0 ? 0 : b - t + 1; };
+
   async function apiRun(o) {
     const set = (k, v) => { if (v !== undefined) S[k] = v; };
     set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
     set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
     if (S.smooth) S.pixel = o.shrink || 1; else if (o.pixel) S.pixel = o.pixel;
     if (o.key) S.key = hexToRgb(o.key);
-    await openSource(o.image, o.name || 'sprite', { keepKey: !!o.key, autoPixel: S.smooth ? false : !o.pixel });
+    const warnings = [];
+    let image = o.image, rowInfo = null;
+    if (o.row) { rowInfo = await cropRow(o.image, o.row, o.key); image = rowInfo.url; }
+    await openSource(image, o.name || 'sprite', { keepKey: !!o.key, autoPixel: S.smooth ? false : !o.pixel });
+    if (o.frameCount && S.frames.length !== o.frameCount) warnings.push(`expected ${o.frameCount} frames, found ${S.frames.length}`);
+    if (o.targetHeight) {
+      if (!S.smooth) throw new Error('targetHeight needs smooth mode');
+      const k = Math.min(S.frames.length - 1, Math.max(0, (o.targetFrame || 1) - 1));
+      for (let it = 0; it < 6; it++) {   // one scale for every frame; repeat because soft edges round by a pixel
+        const h = spriteHeight(S.frames[k]);
+        if (!h || h === o.targetHeight) break;
+        S.pixel *= h / o.targetHeight;
+        S.frames.forEach(prepFrame); applyPalettes(); autoCell();
+      }
+      const h = spriteHeight(S.frames[k]);
+      if (h !== o.targetHeight) warnings.push(`target frame is ${h}px, asked ${o.targetHeight}px`);
+    }
     if (o.durations) S.frames.forEach((f, i) => { if (o.durations[i] != null) f.dur = Math.max(10, Math.round(o.durations[i])); });
     if (o.impact !== undefined) S.impact = o.impact;
     render();
@@ -2050,6 +2099,7 @@
     } finally { collect = null; }
     const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
     return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,
+      scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
       files: await Promise.all(got.map(async f => ({ name: f.name, base64: await b64(f.blob) }))) };
   }
   window.SpriteAligner = { run: apiRun, projectJSON, timingJSON };

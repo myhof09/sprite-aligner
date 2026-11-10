@@ -6,6 +6,8 @@
 //   node tools/cli.mjs <sheet.png> [--out DIR] [--name NAME] [--smooth] [--shrink N] [--pixel N] [--key #rrggbb]
 //        [--tol N] [--all-bg] [--fringe] [--despill 0..1] [--pad N] [--align auto|feet|torso]
 //        [--durations 160,80,...] [--impact N|none] [--no-loop] [--left] [--outputs project,all,frames,timing]
+//        [--row N (1 = top row of a multi-row sheet)] [--frames N (expected count)]
+//        [--target-height PX [--target-frame K (1 = first)]]   (smooth mode: one scale so frame K is PX tall)
 //
 // Playwright: `npm i -D playwright` here, or point PLAYWRIGHT_DIR at a folder whose node_modules has it.
 
@@ -17,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 if (!argv.length || argv.includes('--help')) {
-  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 11).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
+  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 13).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
   process.exit(argv.length ? 0 : 1);
 }
 const flag = n => argv.includes(`--${n}`);
@@ -37,6 +39,7 @@ const o = {
   durations: opt('durations') ? opt('durations').split(',').map(Number) : undefined,
   impact: opt('impact') === undefined ? undefined : opt('impact') === 'none' ? -1 : +opt('impact'),
   outputs: opt('outputs') ? opt('outputs').split(',') : undefined,
+  row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
 };
 
 function loadPlaywright() {
@@ -59,7 +62,7 @@ try {
   const r = await page.evaluate(opts => window.SpriteAligner.run(opts), o);
   mkdirSync(out, { recursive: true });
   for (const f of r.files) writeFileSync(join(out, f.name), Buffer.from(f.base64, 'base64'));
-  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
+  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, row: r.row, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
 } finally {
   await browser.close();
 }
