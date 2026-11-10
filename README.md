@@ -16,6 +16,7 @@ AI가 만든 "가짜 픽셀아트" 스프라이트 줄(초록 배경, 간격 불
    - **자동 정렬**: 프레임마다 기준점을 찾아 가이드에 맞춥니다. 그다음 편집 창에서 드래그·방향키로 다듬습니다. **정렬 기준**:
      - **몸통 기준 정렬**: 머리·몸통 중심을 한 세로선에 맞춥니다 (다리·팔·무기는 빼고 계산). 발은 발 선에 두고, 원본에서 뛰어올라 그린 높이는 지켜서 점프가 납작해지지 않습니다. 달리기·걷기용입니다.
      - **발 기준**: 발 위치와 다리 중심을 맞춥니다 (공격·대기 동작).
+     - **바닥선 기준 (쓰러짐)**: 그림 전체(무기 포함)의 가장 낮은 픽셀을 발 선에 두고, 가로 위치는 원본 줄의 같은 너비 칸 안에서 그려진 자리를 지킵니다. 쓰러지는 몸이 가운데로 끌려오지 않습니다(죽음 · 넘어짐).
      - **자동**(기본): 이름에 run / walk / 달리 / 걷 이 들어가면 몸통 기준, 아니면 발 기준입니다.
    - 편집 창 위 도구: ✥ 이동 · ✏ 연필 · ⌫ 지우개 · 💧 스포이트 · 🪄 요술봉 · ▭ 사각형 · ➰ 올가미 · ◎ 임팩트 지점 · ↶↷ 되돌리기
    - **이펙트 지우기**: 요술봉/사각형/올가미로 고른 뒤 선택 지우기, 또는 몸에 붙지 않은 **떨어진 조각** 자동 지우기(미리보기 → 적용). 현재 프레임/모든 프레임, **FX 레이어로 옮기기** 선택 가능.
@@ -44,7 +45,7 @@ npm i -D playwright          # 한 번 (또는 PLAYWRIGHT_DIR=Playwright가 설�
 node tools/cli.mjs attack.png --out out --smooth --all-bg --fringe --pad 16 --align feet      --durations 160,80,60,200,100,140 --impact 3 --no-loop
 ```
 
-옵션: `--name` · `--smooth` (부드러운 그림) · `--shrink N` · `--pixel N` (AI 픽셀 크기, 없으면 감지) · `--key #rrggbb` · `--tol N` · `--all-bg` (가장자리 연결만이 아니라 모든 배경) · `--fringe` · `--despill 0..1` · `--pad N` · `--align auto|feet|torso` · `--durations` · `--impact N|none` · `--no-loop` · `--left` · `--outputs project,all,frames,timing` (기본: 넷 다) · `--row N` (여러 줄 시트의 N번째 줄만, 1 = 맨 위; 줄은 빈 가로 틈으로 찾음) · `--frames N` (기대 프레임 수, 다르면 경고) · `--target-height PX` + `--target-frame K` (부드러운 그림: K번째 프레임이 PX 높이가 되도록 한 배율로 맞춤).
+옵션: `--name` · `--smooth` (부드러운 그림) · `--shrink N` · `--pixel N` (AI 픽셀 크기, 없으면 감지) · `--key #rrggbb` · `--tol N` · `--all-bg` (가장자리 연결만이 아니라 모든 배경) · `--fringe` · `--despill 0..1` · `--pad N` · `--align auto|feet|torso|ground` · `--durations` · `--impact N|none` · `--no-loop` · `--left` · `--outputs project,all,frames,timing` (기본: 넷 다) · `--row N` (여러 줄 시트의 N번째 줄만, 1 = 맨 위; 줄은 빈 가로 틈으로 찾음) · `--frames N` (기대 프레임 수, 다르면 경고) · `--target-height PX` + `--target-frame K` (부드러운 그림: K번째 프레임이 PX 높이가 되도록 한 배율로 맞춤).
 나오는 파일: `이름.sprite-aligner.json`, `이름.png` + `.json` + `_preview.gif` (+ 왼쪽/FX/이펙트 시트), `이름_frame_01.png` …, `이름_timing.json`.
 페이지 안에서는 `window.SpriteAligner.run({...})`로도 부를 수 있습니다(같은 옵션, 파일을 base64로 돌려줌).
 

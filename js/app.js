@@ -269,7 +269,17 @@
   // (frames drawn higher than the others on the source's ground keep that height: jumps are not flattened).
   const CYCLE = /run|walk|jog|dash|sprint|달리|걷|뛰/i;
   const alignMode = () => (S.alignBy === 'auto' ? (CYCLE.test(S.name) ? 'torso' : 'feet') : S.alignBy);
-  const anchorX = f => (alignMode() === 'torso' && f.torso ? f.torso.tx : f.anchor.bx);
+  // ground (바닥선 기준, falls / deaths): the lowest visible pixel of the whole sprite (weapons included) on the
+  // baseline, and the sprite keeps where it was drawn inside its equal-width cell of the source row, so a body that
+  // falls sideways is not pulled back to the centre.
+  const lowestRow = f => { for (let y = f.img.h - 1; y >= 0; y--) for (let x = 0; x < f.img.w; x++) if (f.img.data[(y * f.img.w + x) * 4 + 3]) return y + 1; return f.img.h; };
+  function groundX(f) {
+    const i = S.frames.indexOf(f), cell = src ? src.w / Math.max(1, S.frames.length) : 0;
+    const left = f.pre && f.pre.sx !== undefined ? f.pre.sx : f.box ? f.box.x : 0;
+    return ((i + 0.5) * cell - left) / pixelOf(f) - f.x0;
+  }
+  const anchorX = f => (alignMode() === 'ground' && f.box ? groundX(f) : alignMode() === 'torso' && f.torso ? f.torso.tx : f.anchor.bx);
+  const anchorY = f => (alignMode() === 'ground' ? lowestRow(f) : f.anchor.by);
 
   /** Torso mode: each frame's feet above the source's ground line (art px; 0 = on the ground). */
   function sourceLift(f) {
@@ -285,7 +295,7 @@
   function autoCell() {
     if (!S.frames.length) return;
     const L = Math.ceil(Math.max(...S.frames.map(anchorX))), R = Math.ceil(Math.max(...S.frames.map(f => f.img.w - anchorX(f))));
-    const U = Math.max(...S.frames.map(f => f.anchor.by + sourceLift(f))), D = Math.max(...S.frames.map(f => f.img.h - f.anchor.by));
+    const U = Math.max(...S.frames.map(f => anchorY(f) + sourceLift(f))), D = Math.max(...S.frames.map(f => f.img.h - anchorY(f)));
     S.cellW = L + R + 2 * S.pad; S.cellH = U + D + 2 * S.pad;
     S.guides = { base: S.pad + U, top: S.pad, weapon: Math.round(S.cellH * 0.45), cx: S.pad + L };
     S.frames.forEach(autoPlace);
@@ -308,7 +318,7 @@
   /** Auto-align suggestion: feet on the baseline; the legs' centre (feet mode) or the head / torso centre (torso mode) on the centre line. */
   function autoPlace(f) {
     f.ox = Math.round(S.guides.cx - anchorX(f)) - f.x0;
-    f.oy = S.guides.base - f.anchor.by - sourceLift(f) - f.y0;
+    f.oy = S.guides.base - anchorY(f) - sourceLift(f) - f.y0;
     f.placed = true;
   }
 
@@ -2027,7 +2037,7 @@
    * exports as files [{ name, base64 }] instead of downloading them. Options (all optional except image):
    *   name, smooth (bool), shrink (smooth-mode divisor, default 1), pixel (AI pixel size; omit = detect),
    *   key ('#rrggbb'; omit = guess), tol, keyEdge (bool), fringe (bool), despill (0-1), pad,
-   *   alignBy ('auto' | 'feet' | 'torso'), durations [ms...], impact (frame index, -1 = none), loop (bool), exportLeft (bool),
+   *   alignBy ('auto' | 'feet' | 'torso' | 'ground'), durations [ms...], impact (frame index, -1 = none), loop (bool), exportLeft (bool),
    *   outputs: any of 'project', 'all' (sheet + meta + GIF ...), 'frames', 'timing' (default: all four).
    *   row: process only this row (1 = top) of a multi-row sheet; rows are found from the empty horizontal gaps.
    *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
@@ -2099,7 +2109,7 @@
     } finally { collect = null; }
     const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
     return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,
-      scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
+      scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, shrink: S.smooth ? S.pixel : null, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
       files: await Promise.all(got.map(async f => ({ name: f.name, base64: await b64(f.blob) }))) };
   }
   window.SpriteAligner = { run: apiRun, projectJSON, timingJSON };

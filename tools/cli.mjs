@@ -4,7 +4,7 @@
 // exactly what the web tool makes, and the project opens in the web tool for hand fine-tuning.
 //
 //   node tools/cli.mjs <sheet.png> [--out DIR] [--name NAME] [--smooth] [--shrink N] [--pixel N] [--key #rrggbb]
-//        [--tol N] [--all-bg] [--fringe] [--despill 0..1] [--pad N] [--align auto|feet|torso]
+//        [--tol N] [--all-bg] [--fringe] [--despill 0..1] [--pad N] [--align auto|feet|torso|ground]
 //        [--durations 160,80,...] [--impact N|none] [--no-loop] [--left] [--outputs project,all,frames,timing]
 //        [--row N (1 = top row of a multi-row sheet)] [--frames N (expected count)]
 //        [--target-height PX [--target-frame K (1 = first)]]   (smooth mode: one scale so frame K is PX tall)
@@ -62,7 +62,7 @@ try {
   const r = await page.evaluate(opts => window.SpriteAligner.run(opts), o);
   mkdirSync(out, { recursive: true });
   for (const f of r.files) writeFileSync(join(out, f.name), Buffer.from(f.base64, 'base64'));
-  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, row: r.row, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
+  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, shrink: r.shrink, row: r.row, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
 } finally {
   await browser.close();
 }
