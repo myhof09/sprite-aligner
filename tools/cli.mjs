@@ -14,7 +14,7 @@
 //             video input: frames via ffmpeg (PATH or FFMPEG), else decoded in Edge / Chrome; a seamless walk cycle is
 //             found from the silhouettes and N evenly spaced frames are processed like a sheet row
 //        [--anchor-out name=PART --anchor-color #rrggbb [--anchor-box x,y,w,h (cell px)] [--anchor-tol N (40)]
-//             [--anchor-point bbox|mean|extreme|lowest (bbox)]]   (repeatable group: per-frame part anchor -> timing frames[].PART)
+//             [--anchor-point bbox|mean|extreme|lowest|blade (bbox)]]   (repeatable group: per-frame part anchor -> timing frames[].PART)
 //        [--extract name=PIECE --extract-frame N (0-based) [--extract-at x,y | --extract-box x,y,w,h] [--extract-erase 2,3]
 //             [--extract-file path/without/ext] [--extract-pivot ground|center] [--extract-discard (only erase it)]]
 //             (repeatable: a piece -> its own PNG + pivot JSON, or just erased)
@@ -102,7 +102,7 @@ function anchorArgs() {
     else if (a === '--anchor-tol') cur.tol = +v;
     else if (a === '--anchor-point') cur.point = v;
   }
-  for (const a of list) if (!a.color) { console.error(`anchor ${a.name}: --anchor-color is missing`); process.exit(1); }
+  for (const a of list) if (!a.color && a.point !== 'blade') { console.error(`anchor ${a.name}: --anchor-color is missing`); process.exit(1); }
   return list;
 }
 

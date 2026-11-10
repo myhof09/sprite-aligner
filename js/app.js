@@ -671,11 +671,12 @@
    * (8-neighbour) and the blade is the long, thin group (score length² / area, length ≥ 20% of the sprite height),
    * so white socks, belts and highlights (short blobs) are ignored. The tip is the end farthest from the body.
    */
-  function bladeTip(f) {
-    const d = f.img.data, w = f.img.w, steel = new Map();
+  function bladeTip(f, box = null) {
+    const d = f.img.data, w = f.img.w, steel = new Map(), bx = f.ox + f.x0, by = f.oy + f.y0;
     for (let y = 0; y < f.img.h; y++) for (let x = 0; x < w; x++) {
       const j = (y * w + x) * 4;
       if (!d[j + 3]) continue;
+      if (box && (bx + x < box[0] || by + y < box[1] || bx + x >= box[0] + box[2] || by + y >= box[1] + box[3])) continue;
       const mx = Math.max(d[j], d[j + 1], d[j + 2]), mn = Math.min(d[j], d[j + 1], d[j + 2]);
       if ((d[j] + d[j + 1] + d[j + 2]) / 3 >= 170 && mx - mn <= 40) steel.set(K(x, y), 1);
     }
@@ -2179,7 +2180,9 @@
    *     (the web tool's "move to FX layer", as a file): <file>.png + <file>.json (pivot, offset from the character pivot);
    *     timing props.<name> = { file, frame, offset }. The piece = its solid pixels (alpha > minAlpha) + the faint rim within
    *     2 px of it that does not touch the body (the frame's biggest piece).
-   *   anchors [{ name, color '#rrggbb', tol (40), box [x, y, w, h] cell px, point 'bbox' | 'mean' | 'extreme' | 'lowest',
+   *   anchors [{ name, color '#rrggbb', tol (40), box [x, y, w, h] cell px, point 'bbox' | 'mean' | 'extreme' | 'lowest' |
+   *     'blade' (blade tip detection like slash trails: the long thin steel group's far end; no colour needed; box limits
+   *     the search, e.g. to keep a shield rim out),
    *     side, frames [indices] (default all) }]: per-frame part anchors -> timing frames[].<name> = { x, y } (cell px),
    *     found on the finished frames (after erase / islands); a frame without the colour gets no entry (warning).
    */
@@ -2565,8 +2568,8 @@
       for (const a of o.anchors) {
         S.frames.forEach((f, i) => {
           if (a.frames && !a.frames.includes(i)) return;
-          const p = colorAnchor(f, a);
-          if (!p) { warnings.push(`anchor ${a.name}: frame ${i + 1} has no ${a.color}`); return; }
+          const p = a.point === 'blade' ? bladeTip(f, a.box) : colorAnchor(f, a);
+          if (!p) { warnings.push(`anchor ${a.name}: frame ${i + 1} has no ${a.point === 'blade' ? 'blade' : a.color}`); return; }
           frameExtra[i][a.name] = { x: Math.round(p.x), y: Math.round(p.y) };
         });
       }
