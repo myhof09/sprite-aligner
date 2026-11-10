@@ -1899,7 +1899,7 @@
       }
       return out;
     });
-    const bytes = GIF.encode(W, H, frames, pal, S.frames.map(f => f.dur), S.gifTransparent ? 0 : -1);
+    const bytes = GIF.encode(W, H, frames, pal, S.frames.map(f => f.dur), S.gifTransparent ? 0 : -1, S.loop);   // 반복 off: plays once, holds the last frame
     download(new Blob([bytes], { type: 'image/gif' }), `${S.name}_preview.gif`);
   }
 

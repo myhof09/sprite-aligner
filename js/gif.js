@@ -3,10 +3,11 @@
 const GIF = (() => {
   /**
    * frames: array of Uint8Array palette indices (w*h each); palette: [[r,g,b], ...] (<= 256);
-   * delaysMs: per-frame durations; transparent: palette index drawn as transparent, or -1.
+   * delaysMs: per-frame durations; transparent: palette index drawn as transparent, or -1;
+   * loop: true = repeat forever (default), false = play once and stay on the last frame.
    * Returns a Uint8Array of the .gif file.
    */
-  function encode(w, h, frames, palette, delaysMs, transparent = -1) {
+  function encode(w, h, frames, palette, delaysMs, transparent = -1, loop = true) {
     const out = [];
     const u8 = (...b) => out.push(...b), u16 = v => out.push(v & 255, (v >> 8) & 255);
     const str = s => { for (const ch of s) out.push(ch.charCodeAt(0)); };
@@ -15,7 +16,7 @@ const GIF = (() => {
     str('GIF89a'); u16(w); u16(h);
     u8(0x80 | ((bits - 1) << 4) | (bits - 1), 0, 0);            // global colour table follows
     for (let i = 0; i < (1 << bits); i++) u8(...(palette[i] || [0, 0, 0]));
-    u8(0x21, 0xff, 11); str('NETSCAPE2.0'); u8(3, 1, 0, 0, 0);  // loop forever
+    if (loop) { u8(0x21, 0xff, 11); str('NETSCAPE2.0'); u8(3, 1, 0, 0, 0); }  // loop forever (no block = play once)
     frames.forEach((idx, f) => {
       const hasT = transparent >= 0;
       // graphic control: disposal 2 (clear to background) so transparent frames do not smear
