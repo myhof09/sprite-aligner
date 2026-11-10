@@ -736,14 +736,18 @@ const IO = (() => {
   /**
    * Colour remap: every foreground pixel near a source colour (RGB distance <= tol) whose colour leans the same way
    * (its offset from grey points the same direction as the source's, cosine >= 0.92) is moved by (dst - src), so
-   * its shading is kept. rules: [{ src: [r,g,b], dst: [r,g,b], tol }]. Returns a new image.
+   * its shading is kept. rules: [{ src: [r,g,b], dst: [r,g,b], tol, box: [x0, y0, x1, y1] (optional, source px) }].
+   * Returns a new image (alpha kept).
    */
   function remapColors(img, mask, rules) {
     const d = img.data, out = new Uint8ClampedArray(d);
+    const w = img.w;
     const prep = rules.map(r => { const m = (r.src[0] + r.src[1] + r.src[2]) / 3, v = r.src.map(c => c - m); return { ...r, v, n: Math.hypot(...v) || 1 }; });
     for (let p = 0, i = 0; i < d.length; p++, i += 4) {
-      if (!mask[p]) continue;
+      if (!mask[p] && !d[i + 3]) continue;
+      const px = p % w, py = (p - px) / w;
       for (const r of prep) {
+        if (r.box && (px < r.box[0] || py < r.box[1] || px >= r.box[2] || py >= r.box[3])) continue;   // only inside box [x0, y0, x1, y1]
         if (Math.hypot(d[i] - r.src[0], d[i + 1] - r.src[1], d[i + 2] - r.src[2]) > (r.tol || 60)) continue;
         const m = (d[i] + d[i + 1] + d[i + 2]) / 3, w = [d[i] - m, d[i + 1] - m, d[i + 2] - m], wn = Math.hypot(...w);
         if (!wn || (w[0] * r.v[0] + w[1] * r.v[1] + w[2] * r.v[2]) / (wn * r.n) < 0.92) continue;

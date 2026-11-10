@@ -147,8 +147,8 @@
     showKeyPending();
     const pre = S.fringe ? IO.fringeToOutline(src, mask, S.key) : src;
     keyed = IO.despill(pre, mask, S.key, S.despill);
-    if (S.remap && S.remap.length) keyed = IO.remapColors(keyed, mask, S.remap);
     if (S.smooth) keyed = IO.softKey(keyed, mask, S.key, S.tol);   // soft, un-mixed edge (alpha in keyed)
+    if (S.remap && S.remap.length) keyed = IO.remapColors(keyed, mask, S.remap);   // after the soft edge, so its un-mixed colours can be remapped too
     ({ labels, comps } = IO.components(mask, src.w, src.h));
     const view = { w: src.w, h: src.h, data: new Uint8ClampedArray(keyed.data) };
     if (!S.smooth) for (let p = 0; p < mask.length; p++) view.data[p * 4 + 3] = mask[p] ? 255 : 0;   // hard alpha
@@ -2160,6 +2160,7 @@
    *   row: process only this row (1 = top) of a multi-row sheet; rows are found from the empty horizontal gaps.
    *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
    *   project (saved project text, instead of image) + pick [frame indices, repeats allowed]; expand [l, t, r, b];
+   *   videoFrames [data URLs] + loopPick { pick, steps } (find a seamless walk / run cycle, pick evenly) or pickFrames;
    *   keyTint N (also key pixels with the background's hue, tint >= N);
    *   erase [{ frame, poly: [[x, y], …] }] and removeIslands { max } (hand edits, kept in the project);
    *   remap [{ src: '#rrggbb', dst: '#rrggbb', tol }] (shading-preserving colour shift, before scaling);
@@ -2324,15 +2325,85 @@
     return e;
   }
 
+  /**
+   * Walk / run loop from video frames: silhouettes (background keyed, centred on their x centroid, the legs = lowest
+   * 45 % of the sprite) are compared; the cycle length is the lag with the lowest average difference near steps × the
+   * first step's lag (one step = one leg; legs look alike in silhouette, so a full cycle is two steps). The start is the
+   * frame whose cycle end flows back into it best. Returns { period, start, picked: [indices], scores }.
+   */
+  async function findLoop(urls, { pick = 8, steps = 2, key = null } = {}) {
+    const sil = [];
+    let k0 = null;
+    for (const url of urls) {
+      const { img } = await loadImage(url);
+      if (!k0) k0 = key ? hexToRgb(key) : IO.guessKey(img);
+      const m = IO.keyMask(img, k0, S.tol, S.edge, { connected: true, borders: false, marks: false });
+      const q = 4, w = Math.ceil(img.w / q), h = Math.ceil(img.h / q), s = new Uint8Array(w * h);
+      let sx = 0, n = 0, y0 = h, y1 = -1;
+      for (let y = 0; y < img.h; y += q) for (let x = 0; x < img.w; x += q) if (m[y * img.w + x]) { s[(y / q) * w + x / q] = 1; sx += x / q; n++; y0 = Math.min(y0, y / q); y1 = Math.max(y1, y / q); }
+      sil.push({ s, w, h, cx: n ? Math.round(sx / n) : w / 2, y0, y1 });
+    }
+    const N = sil.length, band = Math.max(4, Math.round(Math.max(...sil.map(t => t.y1 - t.y0)) * 0.45));
+    const diff = (a, b) => {   // legs of a vs b, aligned on x centroid and on the lowest row
+      let d = 0, c = 0;
+      for (let r = 0; r < band; r++) {
+        const ya = a.y1 - r, yb = b.y1 - r;
+        if (ya < 0 || yb < 0) continue;
+        for (let x = -a.w / 2; x < a.w / 2; x++) {
+          const xa = a.cx + x, xb = b.cx + x;
+          const va = xa >= 0 && xa < a.w ? a.s[ya * a.w + xa] : 0, vb = xb >= 0 && xb < b.w ? b.s[yb * b.w + xb] : 0;
+          d += va !== vb; c++;
+        }
+      }
+      return c ? d / c : 1;
+    };
+    const D = Array.from({ length: N }, () => new Float32Array(N));
+    for (let i = 0; i < N; i++) for (let j = i + 1; j < N; j++) D[i][j] = D[j][i] = diff(sil[i], sil[j]);
+    const avg = [];
+    for (let P = 0; P < Math.floor(N / 2) + 1; P++) { let t = 0; for (let i = 0; i + P < N; i++) t += D[i][i + P]; avg.push(P ? t / (N - P) : 1); }
+    const mins = [];
+    for (let P = 3; P < avg.length - 1; P++) if (avg[P] <= avg[P - 1] && avg[P] <= avg[P + 1]) mins.push(P);
+    if (!mins.length) throw new Error('no repeating walk cycle found in the video');
+    const target = mins[0] * steps;
+    const period = steps === 1 ? mins[0] : (mins.filter(P => P > mins[0]).sort((a, b) => Math.abs(a - target) - Math.abs(b - target))[0] || target);
+    if (period >= N) throw new Error(`the video is too short for a ${steps}-step cycle (${period} frames)`);
+    let best = null;
+    for (let s = 1; s + period < N; s++) {
+      const score = D[s][s + period] + 0.5 * D[s + period - 1][s - 1];
+      if (!best || score < best.score) best = { s, score };
+    }
+    const start = best ? best.s : 0;
+    const picked = Array.from({ length: pick }, (_, k) => start + Math.round(k * period / pick));
+    return { period, start, picked, seam: best ? +best.score.toFixed(4) : null, stepLag: mins[0], frames: N };
+  }
+
+  /** Frames (data URLs) side by side on the background colour of the first frame: one strip for the normal pipeline. */
+  async function stripFrom(urls, idx) {
+    const ims = [];
+    for (const i of idx) ims.push((await loadImage(urls[i])).canvas);
+    const w = Math.max(...ims.map(c => c.width)), h = Math.max(...ims.map(c => c.height)), c = document.createElement('canvas');
+    c.width = w * ims.length; c.height = h;
+    const g = c.getContext('2d'), d0 = ims[0].getContext('2d').getImageData(0, 0, 1, 1).data;
+    g.fillStyle = `rgb(${d0[0]},${d0[1]},${d0[2]})`; g.fillRect(0, 0, c.width, c.height);
+    ims.forEach((im, k) => g.drawImage(im, k * w, 0));
+    return c.toDataURL('image/png');
+  }
+
   async function apiRun(o) {
     const set = (k, v) => { if (v !== undefined) S[k] = v; };
     set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
     set('keyTint', o.keyTint); set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
     if (S.smooth) S.pixel = o.shrink || 1; else if (o.pixel) S.pixel = o.pixel;
     if (o.key) S.key = hexToRgb(o.key);
-    if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60 }));
+    if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60, ...(r.box ? { box: r.box } : {}) }));
     const warnings = [];
-    let image = o.image, rowInfo = null;
+    let image = o.image, rowInfo = null, loopInfo = null;
+    if (o.videoFrames) {   // video: o.videoFrames = [data URL per frame]; o.loopPick { pick, steps } or o.pickFrames [indices]
+      const idx = o.pickFrames || (loopInfo = await findLoop(o.videoFrames, { ...(o.loopPick || {}), key: o.key })).picked;
+      image = await stripFrom(o.videoFrames, idx);
+      if (!o.frameCount) o.frameCount = idx.length;
+      loopInfo = { ...(loopInfo || {}), picked: idx };
+    }
     if (o.project) {
       // reuse a saved project (its keying, scale and alignment); pick = frame indices to use, repeats allowed
       const p = JSON.parse(o.project);
@@ -2431,7 +2502,7 @@
     } finally { collect = null; apiTiming = null; }
     const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
     return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,
-      scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, shrink: S.smooth ? S.pixel : null, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
+      scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, shrink: S.smooth ? S.pixel : null, loop: loopInfo, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
       files: await Promise.all(got.map(async f => ({ name: f.name, base64: await b64(f.blob) }))) };
   }
   window.SpriteAligner = { run: apiRun, projectJSON, timingJSON };
