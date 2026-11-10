@@ -142,6 +142,16 @@
 
   // ---------- pipeline ----------
   function rekey() {
+    if (S.noKey) {   // --key none: no background removal; the image's own alpha is the mask, colours untouched
+      mask = new Uint8Array(src.w * src.h);
+      for (let p = 0; p < mask.length; p++) mask[p] = src.data[p * 4 + 3] ? 1 : 0;
+      keyed = { w: src.w, h: src.h, data: new Uint8ClampedArray(src.data) };
+      if (S.remap && S.remap.length) keyed = IO.remapColors(keyed, mask, S.remap);
+      ({ labels, comps } = IO.components(mask, src.w, src.h));
+      keyPreview = null;
+      keyedCanvas = toCanvas(keyed);
+      return;
+    }
     mask = IO.keyMask(src, S.key, S.tol, S.edge, keyOpts());
     if (S.keyTint > 0) IO.keyByTint(src, mask, S.key, S.keyTint);
     keyPreview = null;
@@ -158,19 +168,81 @@
 
   const newFrame = (box, raw, dur = 100) => ({ box, raw, dur, ox: 0, oy: 0, edits: new Map(), fx: new Map() });
 
+  /** Fixed grid (--grid cols x rows or --frame-size w,h): one frame per cell, left to right, top to bottom. For sheets
+   *  whose frames are sparse or overlap, where blob detection would split or merge them. */
+  function gridBoxes() {
+    const g = S.grid;
+    const fw = g.fw || Math.floor(src.w / g.cols), fh = g.fh || Math.floor(src.h / g.rows);
+    const cols = Math.floor(src.w / fw), rows = Math.floor(src.h / fh), boxes = [];
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) boxes.push({ x: c * fw, y: r * fh, w: fw, h: fh });
+    return g.count ? boxes.slice(0, g.count) : boxes;
+  }
+
   function detect(autoPixel = true) {
-    const boxes = IO.detectFrames(comps, { bodyFrac: S.bodyFrac, minPiece: S.minPiece });
+    const boxes = S.grid ? gridBoxes() : IO.detectFrames(comps, { bodyFrac: S.bodyFrac, minPiece: S.minPiece });
     const old = S.frames;
-    S.frames = boxes.map((box, i) => newFrame(box, false, old[i] ? old[i].dur : 100));
+    S.frames = boxes.map((box, i) => newFrame(box, !!S.grid, old[i] ? old[i].dur : 100));
+    if (S.grid) autoPixel = false;   // the grid gives the frames; the scale is as set (--shrink / --pixel)
     boxSel.clear(); selection.clear(); cur = 0;
     undoStack.length = redoStack.length = 0;
     if (autoPixel && !S.smooth) detectPixel();   // smooth art: no fake-pixel grid to find, the scale stays as set
     if (S.perFramePixel && !S.smooth) detectFramePixels();
     S.frames.forEach(prepFrame);
     applyPalettes();
-    autoCell();
+    if (S.grid) gridCell(); else autoCell();
     if (S.head) compareHeads();
     render();
+  }
+
+  /** Grid mode: the cell = the source cell (scaled); every frame stays where it was drawn inside its cell. */
+  function gridCell() {
+    const b = S.frames[0].box, p = S.pixel;
+    S.cellW = Math.round(b.w / p); S.cellH = Math.round(b.h / p);
+    S.guides = { base: S.cellH, top: 0, weapon: Math.round(S.cellH * 0.45), cx: S.cellW / 2 };
+    for (const f of S.frames) {
+      const pp = pixelOf(f);
+      f.ox = Math.round(((f.pre.sx ?? f.box.x) - f.box.x) / pp);
+      f.oy = Math.round(((f.pre.sy ?? f.box.y) - f.box.y) / pp);
+      f.placed = true;
+    }
+    syncInputs();
+  }
+
+  /** Grid mode, after placement: drop empty tail frames, trim every frame to the union box of lit pixels (+pad), set the
+   *  pivot (source-cell px), the impact frame (brightest), the blend. lum = PIL "L" (ITU-R 601), so a frame counts as
+   *  lit where a pixel is opaque and brighter than `trimLum` (-1: any opaque pixel). */
+  function gridFinish(o) {
+    const L = (d, i) => (d[i] * 19595 + d[i + 1] * 38470 + d[i + 2] * 7471 + 0x8000) >> 16;
+    const lit = (f, th) => {   // cell-space box of the frame's lit pixels, or null
+      let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+      const d = f.img.data, w = f.img.w;
+      for (let y = 0; y < f.img.h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (!d[i + 3] || (th >= 0 && L(d, i) <= th)) continue;
+        const cx = f.ox + f.x0 + x, cy = f.oy + f.y0 + y;
+        if (cx < x0) x0 = cx; if (cy < y0) y0 = cy; if (cx > x1) x1 = cx; if (cy > y1) y1 = cy;
+      }
+      return x1 < 0 ? null : { x0, y0, x1: x1 + 1, y1: y1 + 1 };
+    };
+    const th = o.trimLum ?? -1;
+    if (o.dropEmpty) { while (S.frames.length > 1 && !lit(S.frames[S.frames.length - 1], th)) S.frames.pop(); }
+    let off = [0, 0];
+    if (o.trim) {
+      const bs = S.frames.map(f => lit(f, th)).filter(Boolean), pad = o.trimPad ?? 2;
+      if (bs.length) {
+        const x0 = Math.max(0, Math.min(...bs.map(b => b.x0)) - pad), y0 = Math.max(0, Math.min(...bs.map(b => b.y0)) - pad);
+        const x1 = Math.min(S.cellW, Math.max(...bs.map(b => b.x1)) + pad), y1 = Math.min(S.cellH, Math.max(...bs.map(b => b.y1)) + pad);
+        for (const f of S.frames) { f.ox -= x0; f.oy -= y0; }
+        S.cellW = x1 - x0; S.cellH = y1 - y0; off = [x0, y0];
+      }
+    }
+    const r1 = v => Math.round(v * 10) / 10;
+    if (o.pivot) S.guides = { ...S.guides, cx: r1(o.pivot[0] / S.pixel - off[0]), base: r1(o.pivot[1] / S.pixel - off[1]) };
+    if (o.impactBright) {
+      const e = S.frames.map(f => { let s = 0; for (let i = 0; i < f.img.data.length; i += 4) if (f.img.data[i + 3]) s += L(f.img.data, i); return s; });
+      S.impact = e.indexOf(Math.max(...e));
+    }
+    S.trimOffset = off;
   }
 
   function detectPixel() {
@@ -1932,6 +2004,8 @@
       pivot: { x: g.cx, y: g.base, note: 'centre line x, feet baseline y (pixel boundaries)' },
       impactFrame: S.impact >= 0 ? S.impact : null,   // (null: no impact frame, e.g. a run cycle)
       impactPoint: S.impact >= 0 ? S.impactPoint : null,
+      ...(S.blendOut ? { blend: S.blendOut } : {}),
+      ...(S.grid ? { grid: { trimOffset: S.trimOffset || [0, 0] } } : {}),
       guides: { ...g },
       pixelSize: S.pixel,
       palette: [...colors],
@@ -2424,7 +2498,10 @@
     set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
     set('keyTint', o.keyTint); set('edgeNeutral', o.edgeNeutral); set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
     if (S.smooth) S.pixel = o.shrink || 1; else if (o.pixel) S.pixel = o.pixel;
-    if (o.key) S.key = hexToRgb(o.key);
+    S.noKey = o.key === 'none';
+    if (o.key && !S.noKey) S.key = hexToRgb(o.key);
+    S.grid = o.grid ? { cols: o.grid[0], rows: o.grid[1], count: o.frameCount } : o.frameSize ? { fw: o.frameSize[0], fh: o.frameSize[1], count: o.frameCount } : null;
+    S.blendOut = o.blend || null;
     if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60, ...(r.box ? { box: r.box } : {}) }));
     const warnings = [];
     let image = o.image, rowInfo = null, loopInfo = null;
@@ -2445,6 +2522,7 @@
     if (o.row) { rowInfo = await cropRow(o.image, o.row, o.key); image = rowInfo.url; }
     await openSource(image, o.name || 'sprite', { keepKey: !!o.key, autoPixel: S.smooth ? false : !o.pixel });
     }
+    if (S.grid) gridFinish(o);
     if (o.frameCount && S.frames.length !== o.frameCount) warnings.push(`expected ${o.frameCount} frames, found ${S.frames.length}`);
     if (o.targetHeight && !o.project) {
       if (!S.smooth) throw new Error('targetHeight needs smooth mode');

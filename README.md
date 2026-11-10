@@ -57,6 +57,13 @@ node tools/cli.mjs attack.png --out out --smooth --all-bg --fringe --pad 16 --al
 
 **이펙트만 내보내기 (`node tools/cli.mjs fx 레시피.safx.json... --out DIR [--size PX] [--hue DEG] [--speed X] [--blend add|normal] [--impact-hold MS]`)**: "이펙트만" 모드의 내보내기를 화면 없이 합니다. sa-fx 레시피마다 스프라이트 시트 PNG + 메타 JSON(fps, durations, impactFrame, blend, pivot). 그림이 캔버스 끝에 닿으면 같은 픽셀 크기로 캔버스만 키워 다시 그립니다(잘림 없음).
 
+**고정 격자 프레임 (`--grid 열x행` 또는 `--frame-size W,H`)**: 프레임을 덩어리(blob) 검출로 찾지 않고 격자 칸 하나 = 프레임 하나로 자릅니다(왼쪽→오른쪽, 위→아래). 희미하거나 흩어진 이펙트 프레임, 서로 겹치는 프레임이 쪼개지거나 합쳐지지 않고, 각 프레임은 칸 안의 원래 자리를 지킵니다. 함께 쓰는 옵션:
+`--key none`(배경 제거 없음: 그림의 알파가 곧 마스크, 색 그대로), `--remap`(칸 나누기 전에 색 이동), `--smooth --shrink N` / `--pixel N`(칸마다 축소: 플립북 일괄 축소),
+`--trim 밝기|off`(모든 프레임의 '밝기보다 밝은 불투명 픽셀' 합집합 상자로 자르기, -1 = 불투명이면 모두) `--trim-pad N`(기본 2), `--drop-empty`(뒤쪽 빈 프레임 버리기),
+`--pivot X,Y`(원본 칸 기준 픽셀 → 자른 뒤 좌표로 메타 pivot), `--impact bright`(가장 밝은 프레임), `--blend add|normal`(메타에 기록).
+예: 검은 배경으로 구운 3D 이펙트 → `cli.mjs strip.png --grid 24x1 --key none --smooth --shrink 1 --pad 0 --trim 10 --drop-empty --pivot 128,151.5 --impact bright --blend add`;
+8×8 플립북 축소 → `cli.mjs fire.png --grid 8x8 --key none --smooth --shrink 5.333`.
+
 **색 비교 (`node tools/cli.mjs measure frame.png --ref master.png [--box x,y,w,h] [--ref-box …] [--colors 14] [--min-share 2] [--min-diff 12]`)**: 두 그림의 불투명 픽셀을 함께 군집으로 나눠, 군집마다 프레임 쪽 중앙값과 마스터 쪽 중앙값을 비교하고 `--remap '#src>#dst,tol'` 제안을 출력합니다. 같은 색 계열(색상 30° 안, 또는 둘 다 회색조)만 짝짓고, 따뜻한 색(피부·갈색·금색)은 보여만 주고 제안하지 않습니다(금색 부품은 `box`를 준 규칙으로 직접). 작은 부품은 `--box`와 낮은 `--min-share`로 그 영역만 재세요.
 주의: `--row`를 쓰면 색 바꾸기 규칙의 `box`는 그 줄을 잘라낸 그림 기준 px입니다(결과의 `row.y[0]`만큼 위에서 뺌).
 

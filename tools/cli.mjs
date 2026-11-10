@@ -9,6 +9,10 @@
 //        [--row N (1 = top row of a multi-row sheet)] [--frames N (expected count)]
 //        [--target-height PX [--target-frame K (1 = first)]]   (smooth mode: one scale so frame K is PX tall)
 //        [--edge-neutral (soft-edge pixels pushed to the anti-key colour, e.g. green, become grey)]
+//        [--grid COLSxROWS | --frame-size W,H]   fixed grid: one frame per cell (sparse / overlapping effect frames are not
+//            blob-split); frames keep their place in the cell. With it: [--key none] (no background removal: alpha = mask),
+//            [--trim LUM|off] (crop to the union box of pixels brighter than LUM, -1 = any opaque) [--trim-pad N (2)]
+//            [--drop-empty] (drop empty tail frames) [--pivot X,Y] (source-cell px) [--impact bright] [--blend add|normal]
 //        [--key-tint N (also key background-hued specks)] [--remap '#src>#dst[,tol[,x0,y0,x1,y1]]' (repeatable: shading-preserving colour shift)]
 //        [--video clip.mp4 [--loop-pick N (default 8)] [--loop-steps 2] [--pick-frames 0,2,5,…] [--keep-frames DIR]]
 //             video input: frames via ffmpeg (PATH or FFMPEG), else decoded in Edge / Chrome; a seamless walk cycle is
@@ -76,7 +80,16 @@ const o = {
   keyEdge: flag('all-bg') ? false : undefined, fringe: flag('fringe') || undefined, despill: num('despill'), pad: num('pad'),
   alignBy: opt('align'), loop: flag('no-loop') ? false : undefined, exportLeft: flag('left') || undefined,
   durations: opt('durations') ? opt('durations').split(',').map(Number) : undefined,
-  impact: opt('impact') === undefined ? undefined : opt('impact') === 'none' ? -1 : +opt('impact'),
+  impact: opt('impact') === undefined || opt('impact') === 'bright' ? undefined : opt('impact') === 'none' ? -1 : +opt('impact'),
+  impactBright: opt('impact') === 'bright' || undefined,
+  grid: opt('grid') ? opt('grid').toLowerCase().split('x').map(Number) : undefined,
+  frameSize: opt('frame-size') ? nums(opt('frame-size')) : undefined,
+  trim: opt('trim') !== undefined && opt('trim') !== 'off' ? true : undefined,
+  trimLum: opt('trim') !== undefined && opt('trim') !== 'off' ? +opt('trim') : undefined,
+  trimPad: num('trim-pad'),
+  dropEmpty: flag('drop-empty') || undefined,
+  pivot: opt('pivot') ? nums(opt('pivot')) : undefined,
+  blend: opt('blend'),
   outputs: opt('outputs') ? opt('outputs').split(',') : undefined,
   remap: argv.flatMap((a, i) => (a === '--remap' ? [argv[i + 1]] : [])).map(r => { const [m, tol, ...box] = r.split(','); const [src, dst] = m.split('>'); return { src, dst, tol: tol ? +tol : 60, ...(box.length === 4 ? { box: box.map(Number) } : {}) }; }),
   keyTint: num('key-tint'), edgeNeutral: flag('edge-neutral') || undefined,
