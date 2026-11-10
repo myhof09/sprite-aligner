@@ -17,6 +17,7 @@
   const S = {
     name: 'sprite', srcURL: '',
     key: [40, 250, 34], tol: 90, edge: 70, despill: 1,
+    fringe: false,   // recolour key-tinted edge pixels to the neighbouring outline colour (off: despill only)
     keyEdge: true, keyBorders: true, keyMarks: true,   // background: only what touches the image edge; panel lines; corner watermarks
     bodyFrac: 0.2, minPiece: 8,
     smooth: false,   // 부드러운 그림: soft-painted art, no pixel processing (soft key edge, smooth scaling, no palette)
@@ -141,7 +142,8 @@
     mask = IO.keyMask(src, S.key, S.tol, S.edge, keyOpts());
     keyPreview = null;
     showKeyPending();
-    keyed = IO.despill(src, mask, S.key, S.despill);
+    const pre = S.fringe ? IO.fringeToOutline(src, mask, S.key) : src;
+    keyed = IO.despill(pre, mask, S.key, S.despill);
     if (S.smooth) keyed = IO.softKey(keyed, mask, S.key, S.tol);   // soft, un-mixed edge (alpha in keyed)
     ({ labels, comps } = IO.components(mask, src.w, src.h));
     const view = { w: src.w, h: src.h, data: new Uint8ClampedArray(keyed.data) };
@@ -1250,7 +1252,7 @@
     'gifScale', 'tile', 'gameScale', 'wandTol', 'islandMax'];
   const INTS = ['cellW', 'cellH', 'zoom', 'pzoom', 'gifScale', 'pad', 'colors', 'tile', 'wandTol', 'islandMax'];
   const CHECKS = ['snap', 'onion', 'grid', 'loop', 'lone', 'sharedPalette', 'outline', 'gifTransparent', 'flipView', 'gameView',
-    'toFx', 'exportLeft', 'batchAutoPixel', 'perFramePixel', 'showEffects', 'keyEdge', 'keyBorders', 'keyMarks', 'smooth'];
+    'toFx', 'exportLeft', 'batchAutoPixel', 'perFramePixel', 'showEffects', 'keyEdge', 'keyBorders', 'keyMarks', 'smooth', 'fringe'];
 
   function syncInputs() {
     for (const k of NUM_INPUTS) $(k).value = S[k];
@@ -1289,7 +1291,9 @@
     const after = {   // what each setting re-runs
       tol: previewKey, edge: previewKey, despill: () => reprocess(true), keyEdge: previewKey, keyBorders: previewKey, keyMarks: previewKey,
       pixel: () => reprocess(false), lone: () => reprocess(false), colors: repalette, sharedPalette: repalette,
-      smooth: () => { if (S.smooth) S.pixel = 1; else if (keyed && S.frames.length) detectPixel(); syncInputs(); reprocess(true); },
+      // switching modes rescales every frame: recompute the cell and guides so nothing ends up outside the cell
+      smooth: async () => { if (S.smooth) S.pixel = 1; else if (keyed && S.frames.length) detectPixel(); syncInputs(); await reprocess(true); if (S.frames.length) { autoCell(); render(); } },
+      fringe: () => reprocess(true),
       outline: () => { if (S.outline) { S.outlineColor = darkest(); syncInputs(); } recomposeAll(); },
       cellW: render, cellH: render, zoom: drawEditor, pzoom: drawPreview, grid: render, onion: drawEditor,
       flipView: drawPreview, gameView: drawPreview, tile: drawPreview, gameScale: drawPreview,
@@ -1386,6 +1390,8 @@
     $('btnMeta').onclick = () => exportMeta();
     $('btnGif').onclick = () => exportGif();
     $('btnAll').onclick = () => exportAll();
+    $('btnFrames').onclick = () => exportFrames();
+    $('btnTiming').onclick = () => exportTiming();
     $('fileBatch').onchange = e => { const files = [...e.target.files]; e.target.value = ''; if (files.length) batch(files); };
 
     // drop a PNG or project file anywhere
@@ -1767,7 +1773,9 @@
   }
 
   // ---------- export ----------
+  let collect = null;   // CLI / API: exports are collected here instead of downloaded
   function download(blob, name) {
+    if (collect) { collect.push({ name, blob }); return; }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = name;
     document.body.append(a); a.click(); a.remove();
@@ -1885,6 +1893,26 @@
     download(new Blob([bytes], { type: 'image/gif' }), `${S.name}_preview.gif`);
   }
 
+  /** One PNG per frame (same cell size and alignment as the sheet): <name>_frame_01.png ... */
+  async function exportFrames() {
+    if (!S.frames.length) return;
+    for (let i = 0; i < S.frames.length; i++) await savePNG(cellCanvas(i, { fx: false, effects: merged() }), `${S.name}_frame_${String(i + 1).padStart(2, '0')}.png`);
+  }
+
+  /** Timing JSON for the per-frame PNGs: file, duration, impact, pivot. */
+  function timingJSON() {
+    return {
+      name: S.name, loop: S.loop, frameWidth: S.cellW, frameHeight: S.cellH,
+      pivot: { x: S.guides.cx, y: S.guides.base }, impactFrame: S.impact >= 0 ? S.impact : null,
+      totalDuration: S.frames.reduce((a, f) => a + f.dur, 0),
+      frames: S.frames.map((f, i) => ({ index: i, file: `${S.name}_frame_${String(i + 1).padStart(2, '0')}.png`, duration_ms: f.dur })),
+    };
+  }
+  function exportTiming() {
+    if (!S.frames.length) return;
+    download(new Blob([JSON.stringify(timingJSON(), null, 2)], { type: 'application/json' }), `${S.name}_timing.json`);
+  }
+
   async function exportAll() {
     if (!S.frames.length) { status('내보낼 프레임이 없습니다.'); return; }
     await exportSheet();
@@ -1974,7 +2002,7 @@
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
     // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
-    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false }, settings);
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();
@@ -1992,6 +2020,39 @@
     syncInputs(); render(); openStep(3);
     status(`프로젝트 열림: ${S.name} (프레임 ${S.frames.length}개)`);
   }
+
+  // ---------- API (used by tools/cli.mjs; also callable from the console) ----------
+  /**
+   * SpriteAligner.run(o): open o.image (data URL) with the given settings, run the automatic cleanup and return the
+   * exports as files [{ name, base64 }] instead of downloading them. Options (all optional except image):
+   *   name, smooth (bool), shrink (smooth-mode divisor, default 1), pixel (AI pixel size; omit = detect),
+   *   key ('#rrggbb'; omit = guess), tol, keyEdge (bool), fringe (bool), despill (0-1), pad,
+   *   alignBy ('auto' | 'feet' | 'torso'), durations [ms...], impact (frame index, -1 = none), loop (bool), exportLeft (bool),
+   *   outputs: any of 'project', 'all' (sheet + meta + GIF ...), 'frames', 'timing' (default: all four).
+   */
+  async function apiRun(o) {
+    const set = (k, v) => { if (v !== undefined) S[k] = v; };
+    set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
+    set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
+    if (S.smooth) S.pixel = o.shrink || 1; else if (o.pixel) S.pixel = o.pixel;
+    if (o.key) S.key = hexToRgb(o.key);
+    await openSource(o.image, o.name || 'sprite', { keepKey: !!o.key, autoPixel: S.smooth ? false : !o.pixel });
+    if (o.durations) S.frames.forEach((f, i) => { if (o.durations[i] != null) f.dur = Math.max(10, Math.round(o.durations[i])); });
+    if (o.impact !== undefined) S.impact = o.impact;
+    render();
+    const want = new Set(o.outputs || ['project', 'all', 'frames', 'timing']);
+    const got = collect = [];
+    try {
+      if (want.has('project')) saveProject();
+      if (want.has('all')) await exportAll();
+      if (want.has('frames')) await exportFrames();
+      if (want.has('timing')) exportTiming();
+    } finally { collect = null; }
+    const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
+    return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,
+      files: await Promise.all(got.map(async f => ({ name: f.name, base64: await b64(f.blob) }))) };
+  }
+  window.SpriteAligner = { run: apiRun, projectJSON, timingJSON };
 
   // ---------- start ----------
   bindInputs(); bindSource(); bindEditor(); bindEffects();

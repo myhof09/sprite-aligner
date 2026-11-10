@@ -694,7 +694,46 @@ const IO = (() => {
     return { ...best, s: +best.s.toFixed(2), w: Math.round(ref.w * best.s), h: Math.round(ref.h * best.s) };
   }
 
-  return { guessKey, keyMask, despill, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
+  /**
+   * Fringe -> outline: foreground pixels next to the removed background whose colour leans toward the key colour
+   * (the AI's blend of outline and background) take the most common dark (outline) colour around them, so no new
+   * colours appear. Pixels with no dark neighbour within 6 px stay as they are. Returns a new image.
+   */
+  function fringeToOutline(img, mask, key) {
+    const { w, h } = img, d = img.data, out = new Uint8ClampedArray(d);
+    const km = (key[0] + key[1] + key[2]) / 3, kd = [key[0] - km, key[1] - km, key[2] - km];
+    const kn = Math.hypot(...kd) || 1;
+    const tint = i => { const m = (d[i] + d[i + 1] + d[i + 2]) / 3; return ((d[i] - m) * kd[0] + (d[i + 1] - m) * kd[1] + (d[i + 2] - m) * kd[2]) / kn; };
+    const dark = i => Math.max(d[i], d[i + 1], d[i + 2]) < 145 && (d[i] + d[i + 1] + d[i + 2]) / 3 < 105;
+    let fixed = 0;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const p = y * w + x;
+      if (!mask[p]) continue;
+      let edge = false;
+      for (let dy = -1; dy <= 1 && !edge; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx >= 0 && yy >= 0 && xx < w && yy < h && !mask[yy * w + xx]) { edge = true; break; }
+      }
+      if (!edge || tint(p * 4) <= 18) continue;
+      for (let r = 1; r <= 6; r++) {
+        const count = new Map();
+        for (let yy = Math.max(0, y - r); yy <= Math.min(h - 1, y + r); yy++) for (let xx = Math.max(0, x - r); xx <= Math.min(w - 1, x + r); xx++) {
+          const q = yy * w + xx, i = q * 4;
+          if (!mask[q] || !dark(i) || tint(i) > 18) continue;
+          const k = d[i] << 16 | d[i + 1] << 8 | d[i + 2];
+          count.set(k, (count.get(k) || 0) + 1);
+        }
+        if (!count.size) continue;
+        let best = 0, bn = -1;
+        for (const [k, n] of count) if (n > bn) { best = k; bn = n; }
+        out[p * 4] = best >> 16; out[p * 4 + 1] = best >> 8 & 255; out[p * 4 + 2] = best & 255;
+        fixed++; break;
+      }
+    }
+    return { w, h, data: out, fixed };
+  }
+
+  return { guessKey, keyMask, despill, fringeToOutline, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
            K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, torsoAnchor, wand };
 })();
