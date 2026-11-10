@@ -8,7 +8,8 @@
 //        [--durations 160,80,...] [--impact N|none] [--no-loop] [--left] [--outputs project,all,frames,timing]
 //        [--row N (1 = top row of a multi-row sheet)] [--frames N (expected count)]
 //        [--target-height PX [--target-frame K (1 = first)]]   (smooth mode: one scale so frame K is PX tall)
-//        [--key-tint N (also key background-hued specks)] [--remap '#src>#dst[,tol]' (repeatable: shading-preserving colour shift)]
+//        [--edge-neutral (soft-edge pixels pushed to the anti-key colour, e.g. green, become grey)]
+//        [--key-tint N (also key background-hued specks)] [--remap '#src>#dst[,tol[,x0,y0,x1,y1]]' (repeatable: shading-preserving colour shift)]
 //        [--video clip.mp4 [--loop-pick N (default 8)] [--loop-steps 2] [--pick-frames 0,2,5,…] [--keep-frames DIR]]
 //             video input: frames via ffmpeg (PATH or FFMPEG), else decoded in Edge / Chrome; a seamless walk cycle is
 //             found from the silhouettes and N evenly spaced frames are processed like a sheet row
@@ -25,13 +26,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 if (!argv.length || argv.includes('--help')) {
-  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 19).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
+  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 20).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
   process.exit(argv.length ? 0 : 1);
 }
 const flag = n => argv.includes(`--${n}`);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
 const videoArg = opt('video') && resolve(opt('video'));
-const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left'].includes(argv[i - 1])));
+const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral'].includes(argv[i - 1])));
 const specPath = opt('spec') && resolve(opt('spec'));
 const spec = specPath ? JSON.parse(readFileSync(specPath, 'utf8')) : {};
 const rel = p => resolve(specPath ? dirname(specPath) : process.cwd(), p);
@@ -61,8 +62,8 @@ const o = {
   durations: opt('durations') ? opt('durations').split(',').map(Number) : undefined,
   impact: opt('impact') === undefined ? undefined : opt('impact') === 'none' ? -1 : +opt('impact'),
   outputs: opt('outputs') ? opt('outputs').split(',') : undefined,
-  remap: argv.flatMap((a, i) => (a === '--remap' ? [argv[i + 1]] : [])).map(r => { const [m, tol] = r.split(','); const [src, dst] = m.split('>'); return { src, dst, tol: tol ? +tol : 60 }; }),
-  keyTint: num('key-tint'),
+  remap: argv.flatMap((a, i) => (a === '--remap' ? [argv[i + 1]] : [])).map(r => { const [m, tol, ...box] = r.split(','); const [src, dst] = m.split('>'); return { src, dst, tol: tol ? +tol : 60, ...(box.length === 4 ? { box: box.map(Number) } : {}) }; }),
+  keyTint: num('key-tint'), edgeNeutral: flag('edge-neutral') || undefined,
   row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
 };
 if (!o.remap.length) o.remap = spec.remap;

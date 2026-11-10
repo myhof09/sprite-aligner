@@ -17,6 +17,7 @@
   const S = {
     name: 'sprite', srcURL: '',
     key: [40, 250, 34], tol: 90, edge: 70, despill: 1,
+    edgeNeutral: false,   // soft edge: un-mixed colours tinted away from the key (green from magenta) become grey
     keyTint: 0,      // > 0: also key pixels tinted like the background (same hue direction, tint strength >= keyTint): dark specks of key colour
     remap: [],       // colour remap rules [{ src: [r,g,b], dst: [r,g,b], tol }] (e.g. match a part's colour to another sheet)
     fringe: false,   // recolour key-tinted edge pixels to the neighbouring outline colour (off: despill only)
@@ -147,7 +148,7 @@
     showKeyPending();
     const pre = S.fringe ? IO.fringeToOutline(src, mask, S.key) : src;
     keyed = IO.despill(pre, mask, S.key, S.despill);
-    if (S.smooth) keyed = IO.softKey(keyed, mask, S.key, S.tol);   // soft, un-mixed edge (alpha in keyed)
+    if (S.smooth) keyed = IO.softKey(keyed, mask, S.key, S.tol, S.edgeNeutral);   // soft, un-mixed edge (alpha in keyed)
     if (S.remap && S.remap.length) keyed = IO.remapColors(keyed, mask, S.remap);   // after the soft edge, so its un-mixed colours can be remapped too
     ({ labels, comps } = IO.components(mask, src.w, src.h));
     const view = { w: src.w, h: src.h, data: new Uint8ClampedArray(keyed.data) };
@@ -2130,7 +2131,7 @@
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
     // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
-    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [], keyTint: 0 }, settings);
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [], keyTint: 0, edgeNeutral: false }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();
@@ -2392,7 +2393,7 @@
   async function apiRun(o) {
     const set = (k, v) => { if (v !== undefined) S[k] = v; };
     set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
-    set('keyTint', o.keyTint); set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
+    set('keyTint', o.keyTint); set('edgeNeutral', o.edgeNeutral); set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
     if (S.smooth) S.pixel = o.shrink || 1; else if (o.pixel) S.pixel = o.pixel;
     if (o.key) S.key = hexToRgb(o.key);
     if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60, ...(r.box ? { box: r.box } : {}) }));

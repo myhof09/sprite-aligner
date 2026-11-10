@@ -244,7 +244,10 @@ const IO = (() => {
    * key colour (tol * 0.6 → 0, tol * 2.2 → 1) and the key colour un-mixed from their colour, so a soft-painted
    * outline keeps its anti-aliasing without a coloured fringe. Everything else is opaque. Returns a copy.
    */
-  function softKey(img, mask, key, tol) {
+  // neutral: an un-mixed edge colour that ends up tinted AWAY from the key (magenta key -> green) is turned grey at its
+  // own brightness: thin lines (bow strings, hair strands) otherwise come out bright green after un-mixing.
+  function softKey(img, mask, key, tol, neutral = false) {
+    const km = (key[0] + key[1] + key[2]) / 3, kv = [key[0] - km, key[1] - km, key[2] - km], kn = Math.hypot(...kv) || 1;
     const out = { w: img.w, h: img.h, data: new Uint8ClampedArray(img.data) }, d = out.data;
     const near = nearBackground(mask, img.w, img.h, 2), lo = tol * 0.6, hi = tol * 2.2;
     for (let p = 0; p < mask.length; p++) {
@@ -253,6 +256,10 @@ const IO = (() => {
       if (!near[p]) { d[i + 3] = 255; continue; }
       const a = Math.max(0.08, Math.min(1, (cdist(img.data, i, key) - lo) / (hi - lo)));
       for (let c = 0; c < 3; c++) d[i + c] = (img.data[i + c] - (1 - a) * key[c]) / a;
+      if (neutral) {
+        const m = (d[i] + d[i + 1] + d[i + 2]) / 3, v = [d[i] - m, d[i + 1] - m, d[i + 2] - m], n = Math.hypot(...v);
+        if (n > 20 && (v[0] * kv[0] + v[1] * kv[1] + v[2] * kv[2]) / (n * kn) < -0.8) d[i] = d[i + 1] = d[i + 2] = Math.round(m * 0.8);
+      }
       d[i + 3] = Math.round(a * 255);
     }
     return out;
