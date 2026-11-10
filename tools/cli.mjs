@@ -8,6 +8,7 @@
 //        [--durations 160,80,...] [--impact N|none] [--no-loop] [--left] [--outputs project,all,frames,timing]
 //        [--row N (1 = top row of a multi-row sheet)] [--frames N (expected count)]
 //        [--target-height PX [--target-frame K (1 = first)]]   (smooth mode: one scale so frame K is PX tall)
+//        [--remap '#src>#dst[,tol]' (repeatable: shading-preserving colour shift)]
 //        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
 //                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
 //
@@ -21,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 if (!argv.length || argv.includes('--help')) {
-  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 15).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
+  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 16).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
   process.exit(argv.length ? 0 : 1);
 }
 const flag = n => argv.includes(`--${n}`);
@@ -56,8 +57,10 @@ const o = {
   durations: opt('durations') ? opt('durations').split(',').map(Number) : undefined,
   impact: opt('impact') === undefined ? undefined : opt('impact') === 'none' ? -1 : +opt('impact'),
   outputs: opt('outputs') ? opt('outputs').split(',') : undefined,
+  remap: argv.flatMap((a, i) => (a === '--remap' ? [argv[i + 1]] : [])).map(r => { const [m, tol] = r.split(','); const [src, dst] = m.split('>'); return { src, dst, tol: tol ? +tol : 60 }; }),
   row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
 };
+if (!o.remap.length) o.remap = spec.remap;
 for (const k of Object.keys(o)) if (o[k] === undefined && spec[k] !== undefined) o[k] = spec[k];
 delete o.out;
 

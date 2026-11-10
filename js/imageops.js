@@ -733,7 +733,28 @@ const IO = (() => {
     return { w, h, data: out, fixed };
   }
 
-  return { guessKey, keyMask, despill, fringeToOutline, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
+  /**
+   * Colour remap: every foreground pixel near a source colour (RGB distance <= tol) whose colour leans the same way
+   * (its offset from grey points the same direction as the source's, cosine >= 0.92) is moved by (dst - src), so
+   * its shading is kept. rules: [{ src: [r,g,b], dst: [r,g,b], tol }]. Returns a new image.
+   */
+  function remapColors(img, mask, rules) {
+    const d = img.data, out = new Uint8ClampedArray(d);
+    const prep = rules.map(r => { const m = (r.src[0] + r.src[1] + r.src[2]) / 3, v = r.src.map(c => c - m); return { ...r, v, n: Math.hypot(...v) || 1 }; });
+    for (let p = 0, i = 0; i < d.length; p++, i += 4) {
+      if (!mask[p]) continue;
+      for (const r of prep) {
+        if (Math.hypot(d[i] - r.src[0], d[i + 1] - r.src[1], d[i + 2] - r.src[2]) > (r.tol || 60)) continue;
+        const m = (d[i] + d[i + 1] + d[i + 2]) / 3, w = [d[i] - m, d[i + 1] - m, d[i + 2] - m], wn = Math.hypot(...w);
+        if (!wn || (w[0] * r.v[0] + w[1] * r.v[1] + w[2] * r.v[2]) / (wn * r.n) < 0.92) continue;
+        for (let c = 0; c < 3; c++) out[i + c] = d[i + c] + r.dst[c] - r.src[c];
+        break;
+      }
+    }
+    return { w: img.w, h: img.h, data: out };
+  }
+
+  return { guessKey, keyMask, despill, fringeToOutline, remapColors, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
            K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, torsoAnchor, wand };
 })();

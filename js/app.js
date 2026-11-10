@@ -17,6 +17,7 @@
   const S = {
     name: 'sprite', srcURL: '',
     key: [40, 250, 34], tol: 90, edge: 70, despill: 1,
+    remap: [],       // colour remap rules [{ src: [r,g,b], dst: [r,g,b], tol }] (e.g. match a part's colour to another sheet)
     fringe: false,   // recolour key-tinted edge pixels to the neighbouring outline colour (off: despill only)
     keyEdge: true, keyBorders: true, keyMarks: true,   // background: only what touches the image edge; panel lines; corner watermarks
     bodyFrac: 0.2, minPiece: 8,
@@ -144,6 +145,7 @@
     showKeyPending();
     const pre = S.fringe ? IO.fringeToOutline(src, mask, S.key) : src;
     keyed = IO.despill(pre, mask, S.key, S.despill);
+    if (S.remap && S.remap.length) keyed = IO.remapColors(keyed, mask, S.remap);
     if (S.smooth) keyed = IO.softKey(keyed, mask, S.key, S.tol);   // soft, un-mixed edge (alpha in keyed)
     ({ labels, comps } = IO.components(mask, src.w, src.h));
     const view = { w: src.w, h: src.h, data: new Uint8ClampedArray(keyed.data) };
@@ -2105,7 +2107,7 @@
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
     // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
-    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false }, settings);
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [] }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();
@@ -2135,6 +2137,7 @@
    *   row: process only this row (1 = top) of a multi-row sheet; rows are found from the empty horizontal gaps.
    *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
    *   project (saved project text, instead of image) + pick [frame indices, repeats allowed]; expand [l, t, r, b];
+   *   remap [{ src: '#rrggbb', dst: '#rrggbb', tol }] (shading-preserving colour shift, before scaling);
    *   tips { frame: {x, y} | at } (blade tip per frame: detected, these override); autoTrail (true | { style, shape });
    *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
    *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
@@ -2295,6 +2298,7 @@
     set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
     if (S.smooth) S.pixel = o.shrink || 1; else if (o.pixel) S.pixel = o.pixel;
     if (o.key) S.key = hexToRgb(o.key);
+    if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60 }));
     const warnings = [];
     let image = o.image, rowInfo = null;
     if (o.project) {
