@@ -754,7 +754,21 @@ const IO = (() => {
     return { w: img.w, h: img.h, data: out };
   }
 
-  return { guessKey, keyMask, despill, fringeToOutline, remapColors, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
+  /**
+   * Key by hue: a foreground pixel whose colour leans toward the key's hue (offset from grey, cosine >= 0.95) by at least
+   * `min` (length of that offset) becomes background. Catches dark / light shades of the key colour that the RGB
+   * distance misses (shadowed gaps), while pastel and greyish colours stay. In place on the mask.
+   */
+  function keyByTint(img, mask, key, min) {
+    const d = img.data, km = (key[0] + key[1] + key[2]) / 3, kv = [key[0] - km, key[1] - km, key[2] - km], kn = Math.hypot(...kv) || 1;
+    for (let p = 0, i = 0; i < d.length; p++, i += 4) {
+      if (!mask[p]) continue;
+      const m = (d[i] + d[i + 1] + d[i + 2]) / 3, v = [d[i] - m, d[i + 1] - m, d[i + 2] - m], n = Math.hypot(...v);
+      if (n >= min && (v[0] * kv[0] + v[1] * kv[1] + v[2] * kv[2]) / (n * kn) >= 0.95) mask[p] = 0;
+    }
+  }
+
+  return { guessKey, keyMask, despill, fringeToOutline, remapColors, keyByTint, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
            K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, torsoAnchor, wand };
 })();

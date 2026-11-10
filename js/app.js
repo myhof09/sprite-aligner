@@ -17,6 +17,7 @@
   const S = {
     name: 'sprite', srcURL: '',
     key: [40, 250, 34], tol: 90, edge: 70, despill: 1,
+    keyTint: 0,      // > 0: also key pixels tinted like the background (same hue direction, tint strength >= keyTint): dark specks of key colour
     remap: [],       // colour remap rules [{ src: [r,g,b], dst: [r,g,b], tol }] (e.g. match a part's colour to another sheet)
     fringe: false,   // recolour key-tinted edge pixels to the neighbouring outline colour (off: despill only)
     keyEdge: true, keyBorders: true, keyMarks: true,   // background: only what touches the image edge; panel lines; corner watermarks
@@ -141,6 +142,7 @@
   // ---------- pipeline ----------
   function rekey() {
     mask = IO.keyMask(src, S.key, S.tol, S.edge, keyOpts());
+    if (S.keyTint > 0) IO.keyByTint(src, mask, S.key, S.keyTint);
     keyPreview = null;
     showKeyPending();
     const pre = S.fringe ? IO.fringeToOutline(src, mask, S.key) : src;
@@ -2107,7 +2109,7 @@
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
     // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
-    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [] }, settings);
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [], keyTint: 0 }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();
@@ -2137,6 +2139,8 @@
    *   row: process only this row (1 = top) of a multi-row sheet; rows are found from the empty horizontal gaps.
    *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
    *   project (saved project text, instead of image) + pick [frame indices, repeats allowed]; expand [l, t, r, b];
+   *   keyTint N (also key pixels with the background's hue, tint >= N);
+   *   erase [{ frame, poly: [[x, y], …] }] and removeIslands { max } (hand edits, kept in the project);
    *   remap [{ src: '#rrggbb', dst: '#rrggbb', tol }] (shading-preserving colour shift, before scaling);
    *   tips { frame: {x, y} | at } (blade tip per frame: detected, these override); autoTrail (true | { style, shape, under });
    *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
@@ -2295,7 +2299,7 @@
   async function apiRun(o) {
     const set = (k, v) => { if (v !== undefined) S[k] = v; };
     set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
-    set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
+    set('keyTint', o.keyTint); set('pad', o.pad); set('alignBy', o.alignBy); set('loop', o.loop); set('exportLeft', o.exportLeft);
     if (S.smooth) S.pixel = o.shrink || 1; else if (o.pixel) S.pixel = o.pixel;
     if (o.key) S.key = hexToRgb(o.key);
     if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60 }));
@@ -2332,6 +2336,25 @@
       S.cellW += l + r; S.cellH += t + b;
       S.guides = { ...S.guides, cx: S.guides.cx + l, base: S.guides.base + t, top: S.guides.top + t, weapon: S.guides.weapon + t };
       S.frames.forEach(f => { f.ox += l; f.oy += t; });
+    }
+    // hand edits through the API (stored as edits, so the project keeps them and they can be undone in the web tool):
+    // erase [{ frame (default all), poly: [[x, y], ...] cell px }], then removeIslands { max (px, default any size) }
+    for (const er of o.erase || []) {
+      const list = er.frame === undefined ? S.frames : [S.frames[er.frame]];
+      for (const f of list) {
+        if (!f) continue;
+        for (const k of frameMap(f).keys()) if (pointInPoly(f.ox + KX(k) + 0.5, f.oy + KY(k) + 0.5, er.poly)) f.edits.set(k, [0, 0, 0, 0]);
+        compose(f);
+      }
+    }
+    if (o.removeIslands) {   // keep the biggest piece, drop the detached ones (floating crystals, wisps, …)
+      const max = o.removeIslands.max || Infinity;
+      let gone = 0;
+      for (const f of S.frames) {
+        IO.groups(frameMap(f)).slice(1).forEach(g => { if (g.length < max) { g.forEach(k => f.edits.set(k, [0, 0, 0, 0])); gone++; } });
+        compose(f);
+      }
+      warnings.push(`removed ${gone} detached piece(s)`);
     }
     if (o.tips || o.autoTrail) {
       // blade tip per frame: detected (gaps filled in between), then hand-set ones from o.tips { frame: {x, y} | {from, ...} }

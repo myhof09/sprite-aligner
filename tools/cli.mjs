@@ -8,7 +8,7 @@
 //        [--durations 160,80,...] [--impact N|none] [--no-loop] [--left] [--outputs project,all,frames,timing]
 //        [--row N (1 = top row of a multi-row sheet)] [--frames N (expected count)]
 //        [--target-height PX [--target-frame K (1 = first)]]   (smooth mode: one scale so frame K is PX tall)
-//        [--remap '#src>#dst[,tol]' (repeatable: shading-preserving colour shift)]
+//        [--key-tint N (also key background-hued specks)] [--remap '#src>#dst[,tol]' (repeatable: shading-preserving colour shift)]
 //        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
 //                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
 //
@@ -58,6 +58,7 @@ const o = {
   impact: opt('impact') === undefined ? undefined : opt('impact') === 'none' ? -1 : +opt('impact'),
   outputs: opt('outputs') ? opt('outputs').split(',') : undefined,
   remap: argv.flatMap((a, i) => (a === '--remap' ? [argv[i + 1]] : [])).map(r => { const [m, tol] = r.split(','); const [src, dst] = m.split('>'); return { src, dst, tol: tol ? +tol : 60 }; }),
+  keyTint: num('key-tint'),
   row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
 };
 if (!o.remap.length) o.remap = spec.remap;
