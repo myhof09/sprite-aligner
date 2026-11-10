@@ -21,6 +21,7 @@
     keyTint: 0,      // > 0: also key pixels tinted like the background (same hue direction, tint strength >= keyTint): dark specks of key colour
     remap: [],       // colour remap rules [{ src: [r,g,b], dst: [r,g,b], tol }] (e.g. match a part's colour to another sheet)
     fringe: false,   // recolour key-tinted edge pixels to the neighbouring outline colour (off: despill only)
+    keyPockets: null,   // { dist, minArea }: also key enclosed pure-background regions >= minArea px (dark / grey backgrounds)
     keepPockets: null,   // [top, bottom] fractions of each body's height: enclosed key-coloured pockets there stay (translucent bodies); needs keyEdge off
     retint: null,    // { to: [r,g,b], minCos, fullCos, minTint, fullTint, inset }: key-tinted pixels inside the body get the hue of `to` at their own lightness
     keyEdge: true, keyBorders: true, keyMarks: true,   // background: only what touches the image edge; panel lines; corner watermarks
@@ -143,7 +144,7 @@
   }
 
   // ---------- pipeline ----------
-  let pocketInfo = null, retintCount = 0;   // last rekey's keepPockets / retint results (API report)
+  let pocketInfo = null, retintCount = 0, keyedPockets = 0;   // last rekey's keepPockets / retint results (API report)
   function rekey() {
     if (S.noKey) {   // --key none: no background removal; the image's own alpha is the mask, colours untouched
       mask = new Uint8Array(src.w * src.h);
@@ -157,6 +158,7 @@
     }
     mask = IO.keyMask(src, S.key, S.tol, S.edge, keyOpts());
     if (S.keyTint > 0) IO.keyByTint(src, mask, S.key, S.keyTint);
+    if (S.keyPockets) keyedPockets = IO.keyPockets(src, mask, S.key, S.keyPockets.dist, S.keyPockets.minArea);
     if (S.keepPockets && !S.keyEdge) pocketInfo = IO.keepPockets(src, mask, S.key, S.tol, S.edge, S.keepPockets, keyOpts());
     keyPreview = null;
     showKeyPending();
@@ -2211,7 +2213,7 @@
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
     // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
-    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [], keyTint: 0, edgeNeutral: false, keepPockets: null, retint: null }, settings);
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [], keyTint: 0, edgeNeutral: false, keepPockets: null, keyPockets: null, retint: null }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();
@@ -2591,6 +2593,7 @@
     S.grid = o.grid ? { cols: o.grid[0], rows: o.grid[1], count: o.frameCount } : o.frameSize ? { fw: o.frameSize[0], fh: o.frameSize[1], count: o.frameCount } : null;
     S.blendOut = o.blend || null;
     if (o.keepPockets !== undefined) S.keepPockets = o.keepPockets;
+    if (o.keyPockets !== undefined) S.keyPockets = o.keyPockets;
     if (o.retint !== undefined) S.retint = o.retint && { ...o.retint, to: typeof o.retint.to === 'string' ? hexToRgb(o.retint.to) : o.retint.to };
     if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60, ...(r.box ? { box: r.box } : {}) }));
     const warnings = [];
@@ -2672,6 +2675,33 @@
         compose(f);
       }
       warnings.push(`removed ${gone} detached piece(s)`);
+    }
+    // stroke { px, color }: a soft outline drawn under the sprite (its alpha dilated by px, anti-aliased), for frames whose
+    // dark outline was keyed with a dark background (a video on black); the frame moves up by px so the feet stay put
+    if (o.stroke) {
+      const col = hexToRgb(o.stroke.color), R = o.stroke.px, r = Math.ceil(R) + 1;
+      const disc = [];
+      for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) { const d = Math.hypot(dx, dy); if (d <= R + 0.5) disc.push([dx, dy, d]); }
+      for (const f of S.frames) {
+        const m = frameMap(f), solid = new Set();
+        for (const [k, c] of m) if (c[3] >= 128) solid.add(k);
+        const cand = new Map();   // key -> stroke alpha (0..1)
+        for (const k of solid) {
+          const x = KX(k), y = KY(k);
+          for (const [dx, dy, d] of disc) {
+            const q = K(x + dx, y + dy), a = Math.max(0, Math.min(1, R + 0.5 - d));
+            if (a > (cand.get(q) || 0)) cand.set(q, a);
+          }
+        }
+        for (const [q, sa] of cand) {
+          const c = m.get(q) || [0, 0, 0, 0], ca = c[3] / 255;
+          if (ca >= 1 || sa <= 0) continue;
+          const oa = ca + sa * (1 - ca), mix = i => Math.round((c[i] * ca + col[i] * sa * (1 - ca)) / oa);
+          f.edits.set(q, [mix(0), mix(1), mix(2), Math.round(oa * 255)]);
+        }
+        compose(f);
+        f.oy -= Math.round(R);
+      }
     }
     if (o.tipsCount > 1) {   // several blades: frames[].tips in the timing JSON (left to right), o.tipsN overrides { frame: [{x, y}, …] }
       S.multiTips = S.frames.map((f, i) => (o.tipsN && o.tipsN[i]) || bladeTipsN(f, o.tipsCount));
@@ -2781,7 +2811,7 @@
     const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
     return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,
       scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, shrink: S.smooth ? S.pixel : null, loop: loopInfo, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
-      pockets: pocketInfo, retinted: S.retint ? retintCount : undefined,
+      pockets: pocketInfo, keyedPockets: S.keyPockets ? keyedPockets : undefined, retinted: S.retint ? retintCount : undefined,
       verify: verify && { ...verify, frames: verify.frames.map(({ overlay, ...v }) => v) },
       files: await Promise.all(got.map(async f => ({ name: f.name, base64: await b64(f.blob) }))) };
   }

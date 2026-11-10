@@ -814,6 +814,21 @@ const IO = (() => {
   }
 
   /**
+   * Key enclosed background pockets on a dark / grey background (a video on black): after the edge-connected key, every
+   * enclosed region whose pixels are all within `dist` (RGB) of the key and that has >= `minArea` pixels is keyed too
+   * (background seen through a gap: between the bow and the string, under an arm); smaller dark regions (pupils, deep
+   * folds) stay. In place on the mask; returns the number of pockets keyed.
+   */
+  function keyPockets(img, mask, key, dist, minArea) {
+    const { w, h, data } = img, n = w * h, cand = new Uint8Array(n);
+    for (let p = 0; p < n; p++) if (mask[p] && Math.hypot(data[p * 4] - key[0], data[p * 4 + 1] - key[1], data[p * 4 + 2] - key[2]) <= dist) cand[p] = 1;
+    const { labels, comps } = components(cand, w, h);
+    const big = new Set(comps.filter(c => c.area >= minArea).map(c => c.id));
+    for (let p = 0; p < n; p++) if (big.has(labels[p])) mask[p] = 0;
+    return big.size;
+  }
+
+  /**
    * Retint: inside the body (not within `inset` px of the background), pixels tinted toward the key's hue (a translucent
    * body showing the background through it) get the hue of `to` at their own lightness: new = grey level m + the
    * target's offset from grey scaled by m / (target's grey level), blended by how key-tinted the pixel is
@@ -838,7 +853,7 @@ const IO = (() => {
     return out;
   }
 
-  return { keyHue, keepPockets, retint, guessKey, keyMask, despill, fringeToOutline, remapColors, keyByTint, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
+  return { keyHue, keepPockets, keyPockets, retint, guessKey, keyMask, despill, fringeToOutline, remapColors, keyByTint, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
            K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, torsoAnchor, wand };
 })();

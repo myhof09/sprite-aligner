@@ -72,6 +72,8 @@ node tools/cli.mjs attack.png --out out --smooth --all-bg --fringe --pad 16 --al
 
 **반투명 몸통 (`--keep-pockets T,B` + `--retint '#rrggbb[,minCos,fullCos,minTint,fullTint]'`)**: 젤리·유리·유령처럼 배경이 비치는 몸. `--all-bg`로 배경을 어디서나 지우되, 가장자리에서 이어진 키로는 남고 전체 키로는 지워지는 "주머니" 중 중심이 몸 높이의 T–B 띠 안에 있는 것은 되살립니다(배경에 물든 몸통). 띠 위·아래(풀잎 사이, 발·물방울 사이 틈)는 그대로 지워집니다. `--retint`는 몸 안쪽(배경에서 3 px 이상) 키 색조로 물든 픽셀을 지정한 색의 색조로, 자기 밝기 그대로 바꿉니다(키 색조 코사인 minCos→fullCos, 세기 minTint→fullTint로 섞임; 기본 0.5,0.8,8,30). `--remap`보다 먼저 돌므로 그다음 `measure` + `--remap`으로 마스터에 맞춥니다. 예(늪 슬라임): `--all-bg --keep-pockets 0.38,0.86 --retint '#9a8244,0.4,0.7,4,16' --verify-key --verify-hue 0.6,8`. 결과 JSON에 `pockets { kept, keyed }`, `retinted`(바뀐 픽셀 수).
 
+**검은 배경 영상 (`--key '#000000' --key-pockets DIST,MINAREA --stroke PX,#rrggbb`)**: 검은 배경 위 영상(걷기·달리기)은 가장자리에서 이어진 키(배경 잡음을 따라가는 채우기라 거의 검은 외곽선은 남음)에 더해, `--key-pockets`가 둘러싸인 순수 배경색 영역(키에서 DIST 안, MINAREA px 이상: 활과 시위 사이, 다리 사이)도 지웁니다. 그보다 작은 어두운 부분(눈동자, 입 속)은 남습니다(원본 해상도 기준이라 큰 영상은 MINAREA를 크게). 영상의 외곽선이 거의 검은색이면 배경과 함께 지워지므로 `--stroke`가 스프라이트 알파를 PX만큼 부드럽게 넓혀 그 색의 외곽선을 아래에 깔고, 발이 그대로 있게 프레임을 PX만큼 올립니다(정지 그림의 외곽선 두께·색에 맞추세요). 결과 JSON에 `keyedPockets`.
+
 **색 비교 (`node tools/cli.mjs measure frame.png --ref master.png [--box x,y,w,h] [--ref-box …] [--colors 14] [--min-share 2] [--min-diff 12]`)**: 두 그림의 불투명 픽셀을 함께 군집으로 나눠, 군집마다 프레임 쪽 중앙값과 마스터 쪽 중앙값을 비교하고 `--remap '#src>#dst,tol'` 제안을 출력합니다. 같은 색 계열(색상 30° 안, 또는 둘 다 회색조)만 짝짓고, 따뜻한 색(피부·갈색·금색)은 보여만 주고 제안하지 않습니다(금색 부품은 `box`를 준 규칙으로 직접). 작은 부품은 `--box`와 낮은 `--min-share`로 그 영역만 재세요.
 주의: `--row`를 쓰면 색 바꾸기 규칙의 `box`는 그 줄을 잘라낸 그림 기준 px입니다(결과의 `row.y[0]`만큼 위에서 뺌).
 

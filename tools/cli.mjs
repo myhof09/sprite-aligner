@@ -25,6 +25,10 @@
 //        [--keep-pockets T,B]   with --all-bg: enclosed key-coloured pockets whose centre is inside rows T..B (fractions of
 //             each body's height) stay: a translucent body (jelly, glass, ghost) tinted by the background is not holed;
 //             pockets above / below (gaps between grass blades, hair, feet) are keyed
+//        [--key-pockets DIST,MINAREA]   dark / grey backgrounds (a video on black): after the edge-connected key, enclosed
+//             regions within DIST of the key and >= MINAREA px are keyed too (gaps); smaller dark details stay
+//        [--stroke PX,#rrggbb]   a soft outline under the sprite (alpha dilated by PX): frames whose dark outline went
+//             with a dark background (a video on black); match the stills' outline width / colour
 //        [--retint '#rrggbb[,minCos,fullCos,minTint,fullTint]']   key-tinted pixels inside the body (>= 3 px from the
 //             background) get this colour's hue at their own lightness (defaults 0.5,0.8,8,30); runs before --remap
 //        [--erase-residue F:x0,y0,x1,y1]   (repeatable; frame index, cell px of the exported frame) key residue seen
@@ -110,6 +114,8 @@ const o = {
   anchors: anchorArgs(),
   extract: extractArgs(),
   keepPockets: opt('keep-pockets') ? nums(opt('keep-pockets')) : undefined,
+  stroke: opt('stroke') ? (([px, color]) => ({ px: +px, color }))(opt('stroke').split(',')) : undefined,
+  keyPockets: opt('key-pockets') ? (([dist, minArea]) => ({ dist, minArea }))(nums(opt('key-pockets'))) : undefined,
   retint: opt('retint') ? (([to, minCos, fullCos, minTint, fullTint]) => ({ to, ...(minCos ? { minCos: +minCos, fullCos: +fullCos, minTint: +minTint, fullTint: +fullTint } : {}) }))(opt('retint').split(',')) : undefined,
   eraseResidue: argv.flatMap((a, i) => (a === '--erase-residue' ? [argv[i + 1]] : [])).map(r => { const [f, box] = r.split(':'); return { frame: +f, box: nums(box) }; }),
   verifyKey: flag('verify-key') || flag('verify-overlay') || undefined, verifyOverlay: flag('verify-overlay') || undefined,
@@ -348,7 +354,7 @@ try {
   const r = await page.evaluate(opts => window.SpriteAligner.run(opts), o);
   mkdirSync(out, { recursive: true });
   for (const f of r.files) { mkdirSync(dirname(join(out, f.name)), { recursive: true }); writeFileSync(join(out, f.name), Buffer.from(f.base64, 'base64')); }
-  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, shrink: r.shrink, row: r.row, video: videoVia && { via: videoVia, frames: o.videoFrames.length }, loop: r.loop, pockets: r.pockets, retinted: r.retinted, verify: r.verify, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
+  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, shrink: r.shrink, row: r.row, video: videoVia && { via: videoVia, frames: o.videoFrames.length }, loop: r.loop, pockets: r.pockets, keyedPockets: r.keyedPockets, retinted: r.retinted, verify: r.verify, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
 } finally {
   await browser.close();
 }
