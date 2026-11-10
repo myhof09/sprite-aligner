@@ -2138,7 +2138,7 @@
    *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
    *   project (saved project text, instead of image) + pick [frame indices, repeats allowed]; expand [l, t, r, b];
    *   remap [{ src: '#rrggbb', dst: '#rrggbb', tol }] (shading-preserving colour shift, before scaling);
-   *   tips { frame: {x, y} | at } (blade tip per frame: detected, these override); autoTrail (true | { style, shape });
+   *   tips { frame: {x, y} | at } (blade tip per frame: detected, these override); autoTrail (true | { style, shape, under });
    *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
    *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
    *     is exactly targetHeight px tall.
@@ -2342,6 +2342,7 @@
     if (o.autoTrail) {   // Sprite Aligner's automatic trail along the (tracked / hand-set) tip path of the swing frames
       Object.assign(S.autoFx, { trail: true, spark: false, dust: false }, typeof o.autoTrail === 'object' ? o.autoTrail : {});
       const keep = S.effects; runAutoFx(false); S.effects = [...keep.filter(e => !e.auto), ...S.effects.filter(e => e.auto)];
+      if (o.autoTrail.under) S.effects.forEach(e => { if (e.auto) e.under = true; });   // e.g. back view: the trail is on the far side of the body
     }
     for (const spec of o.effects || []) await apiEffect(spec, warnings);
     if (S.effects.length && o.autoExpand !== false) {   // grow the cell so no placed effect is cut at its edge
