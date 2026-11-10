@@ -2192,6 +2192,12 @@
     if (!g) return null;
     let sx = 0, sy = 0, y0 = Infinity, y1 = -Infinity;
     for (const k of g) { sx += KX(k); sy += KY(k); y0 = Math.min(y0, KY(k)); y1 = Math.max(y1, KY(k)); }
+    if (at.extreme) {   // the patch's point farthest from the body centre (e.g. the tip of a staff crystal)
+      const cx = f.anchor ? f.anchor.bx : f.img.w / 2, cy = f.img.h * 0.45;
+      let best = g[0], bd = -1;
+      for (const k of g) { const d = (KX(k) - cx) ** 2 + (KY(k) - cy) ** 2; if (d > bd) { bd = d; best = k; } }
+      return { x: f.ox + f.x0 + KX(best) + 0.5, y: f.oy + f.y0 + KY(best) + 0.5, h: y1 - y0 + 1 };
+    }
     return { x: f.ox + f.x0 + sx / g.length, y: f.oy + f.y0 + sy / g.length, h: y1 - y0 + 1 };
   }
 
@@ -2213,7 +2219,7 @@
   /** Blade tip of frame k: the tracked / hand-set tip (S.autoFx.tips) when there is one, else detected now. */
   const tipOf = k => (S.autoFx.tips.length === S.frames.length && S.autoFx.tips[k]) || bladeTip(S.frames[k]);
 
-  /** Where an API effect goes: at = { from: 'feet' | 'center' | 'head' | 'tip' | 'color' | 'point', frame, x, y, dx, dy } (color: + color, tol, side; soles: ground contact between the boots). */
+  /** Where an API effect goes: at = { from: 'feet' | 'center' | 'head' | 'tip' | 'color' | 'point', frame, x, y, dx, dy } (color: + color, tol, side, extreme = farthest point; soles: ground contact between the boots). */
   function apiPos(at = {}) {
     const k = Math.min(S.frames.length - 1, Math.max(0, at.frame || 0)), f = S.frames[k];
     const box = { x: f.ox + f.x0, y: f.oy + f.y0, w: f.img.w, h: f.img.h };
