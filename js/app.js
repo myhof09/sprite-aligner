@@ -589,8 +589,10 @@
   }
 
   /** Draw every effect visible on frame i onto g (already in cell coordinates × z). */
-  function drawEffects(g, i, z) {
+  /** layer: 'over' (default) draws normal effects, 'under' the ones with e.under (afterimages behind the body). */
+  function drawEffects(g, i, z, layer = 'over') {
     for (const e of S.effects) {
+      if (!!e.under !== (layer === 'under')) continue;
       const pl = fxPlaced(e, i);
       if (!pl) continue;
       g.save();
@@ -1000,6 +1002,7 @@
     checker(g, W, H, Math.max(8, z * 4));
     const n = S.frames.length, f = S.frames[i];
     if (onion && n > 1) { blitFrame(g, S.frames[(i - 1 + n) % n], z, 0.25); if (n > 2) blitFrame(g, S.frames[(i + 1) % n], z, 0.25); }
+    if (fx && S.showEffects && f) drawEffects(g, i, z, 'under');
     blitFrame(g, f, z);
     if (fx && S.showEffects && f) drawEffects(g, i, z);
     if (fx && f && f.fxCanvas) { g.globalAlpha = 0.45; g.drawImage(f.fxCanvas, (f.ox + f.fx0) * z, (f.oy + f.fy0) * z, f.fxCanvas.width * z, f.fxCanvas.height * z); g.globalAlpha = 1; }
@@ -1019,6 +1022,7 @@
     const c = document.createElement('canvas');
     c.width = S.cellW; c.height = S.cellH;
     const g = c.getContext('2d'), f = S.frames[i];
+    if (effects) drawEffects(g, i, 1, 'under');
     if (main) g.drawImage(f.canvas, f.ox + f.x0, f.oy + f.y0);
     if (fx && f.fxCanvas) g.drawImage(f.fxCanvas, f.ox + f.fx0, f.oy + f.fy0);
     if (effects) drawEffects(g, i, 1);
@@ -1909,13 +1913,28 @@
     for (let i = 0; i < S.frames.length; i++) await savePNG(cellCanvas(i, { fx: false, effects: merged() }), `${S.name}_frame_${String(i + 1).padStart(2, '0')}.png`);
   }
 
+  /** Effects only, one PNG per character frame, same cell: <name>_fx_01.png ... (empty frames are empty PNGs). */
+  async function exportFxFrames() {
+    if (!S.frames.length) return;
+    for (let i = 0; i < S.frames.length; i++) await savePNG(cellCanvas(i, { main: false, fx: false, effects: true }), `${S.name}_fx_${String(i + 1).padStart(2, '0')}.png`);
+  }
+
+  let apiTiming = null;   // API: extra fields for the timing JSON ({ top, frames: [ {...} per frame ] })
   /** Timing JSON for the per-frame PNGs: file, duration, impact, pivot. */
   function timingJSON() {
+    const t = timingCore();
+    if (apiTiming && apiTiming.top) Object.assign(t, apiTiming.top);
+    if (apiTiming && apiTiming.frames) t.frames.forEach((f, i) => Object.assign(f, apiTiming.frames[i] || {}));
+    return t;
+  }
+  function timingCore() {
     return {
       name: S.name, loop: S.loop, frameWidth: S.cellW, frameHeight: S.cellH,
       pivot: { x: S.guides.cx, y: S.guides.base }, impactFrame: S.impact >= 0 ? S.impact : null,
       totalDuration: S.frames.reduce((a, f) => a + f.dur, 0),
-      frames: S.frames.map((f, i) => ({ index: i, file: `${S.name}_frame_${String(i + 1).padStart(2, '0')}.png`, duration_ms: f.dur })),
+      frames: S.frames.map((f, i) => ({ index: i, file: `${S.name}_frame_${String(i + 1).padStart(2, '0')}.png`, duration_ms: f.dur,
+        ...(S.effects.length ? { fx: `${S.name}_fx_${String(i + 1).padStart(2, '0')}.png` } : {}) })),
+      ...(S.effects.length ? { fxBlend: [...new Set(S.effects.map(e => ({ 'source-over': 'normal', lighter: 'add', screen: 'screen' })[e.blend]))] } : {}),
     };
   }
   function exportTiming() {
@@ -2041,6 +2060,8 @@
    *   outputs: any of 'project', 'all' (sheet + meta + GIF ...), 'frames', 'timing' (default: all four).
    *   row: process only this row (1 = top) of a multi-row sheet; rows are found from the empty horizontal gaps.
    *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
+   *   project (saved project text, instead of image) + pick [frame indices, repeats allowed]; expand [l, t, r, b];
+   *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
    *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
    *     is exactly targetHeight px tall.
    */
@@ -2073,6 +2094,49 @@
   /** Rows with any visible pixel in a frame's sprite. */
   const spriteHeight = f => { let t = -1, b = -1; for (let y = 0; y < f.img.h; y++) for (let x = 0; x < f.img.w; x++) if (f.img.data[(y * f.img.w + x) * 4 + 3]) { if (t < 0) t = y; b = y; break; } return t < 0 ? 0 : b - t + 1; };
 
+  /** Where an API effect goes: at = { from: 'feet' | 'center' | 'head' | 'tip' | 'point', frame, x, y, dx, dy }. */
+  function apiPos(at = {}) {
+    const k = Math.min(S.frames.length - 1, Math.max(0, at.frame || 0)), f = S.frames[k];
+    const box = { x: f.ox + f.x0, y: f.oy + f.y0, w: f.img.w, h: f.img.h };
+    let p;
+    if (at.from === 'point') p = { x: at.x, y: at.y };
+    else if (at.from === 'center') p = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    else if (at.from === 'head') p = { x: box.x + box.w / 2, y: box.y + box.h * 0.2 };
+    else if (at.from === 'tip') p = bladeTip(f) || { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    else p = { x: S.guides.cx, y: S.guides.base };
+    return { x: Math.round(p.x + (at.dx || 0)), y: Math.round(p.y + (at.dy || 0)) };
+  }
+
+  /**
+   * One effect from the API: spec.recipe (sa-fx@1 object) or spec.sheet ({ png: data URL, json, name }: pixelfx or
+   * Sprite Aligner sheet). start / len (character frames), at (see apiPos), follow: 'tip' (blade-tip keyframes),
+   * scale, rot, flip, blend ('add' | 'screen' | 'normal'), opacity, offsetMs, speed (recipe), under (draw behind the body).
+   */
+  async function apiEffect(spec, warnings) {
+    let a;
+    if (spec.recipe) {
+      await SAFX.preload(spec.recipe);
+      a = renderRecipe(spec.recipe, { scale: 1, hue: 0, speed: spec.speed || 1 });
+      if (a.warnings && a.warnings.length) warnings.push(`${a.name}: ${a.warnings.join(', ')}`);
+    } else if (spec.sheet) {
+      const { canvas } = await loadImage(spec.sheet.png);
+      a = { ...FX.fromSheet(canvas, spec.sheet.json || null, spec.sheet.name || 'sheet', 1), url: spec.sheet.png, meta: spec.sheet.json || null, count: 1 };
+    } else throw new Error('effect needs recipe or sheet');
+    const id = addAsset(a), p = apiPos(spec.at);
+    const e = addEffect(id, {
+      start: Math.max(0, spec.start || 0), len: Math.max(1, spec.len || 1), x: p.x, y: p.y, offset: spec.offsetMs || 0,
+      scale: spec.scale || 1, flip: !!spec.flip, opacity: spec.opacity ?? 1, ...(spec.under ? { under: true } : {}),
+      blend: BLEND_FROM_GAME[spec.blend] || (a.game ? BLEND_FROM_GAME[a.game.blend] : null) || 'source-over',
+      ...(spec.rot ? { rot: spec.rot, freeRot: spec.rot % 90 !== 0 } : {}),
+    });
+    if (spec.follow === 'tip') {
+      findBladeTips(e);
+      const at = spec.at || {};
+      for (const k of Object.keys(e.keys)) e.keys[k] = { x: e.keys[k].x + (at.dx || 0), y: e.keys[k].y + (at.dy || 0) };
+    }
+    return e;
+  }
+
   async function apiRun(o) {
     const set = (k, v) => { if (v !== undefined) S[k] = v; };
     set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
@@ -2081,10 +2145,19 @@
     if (o.key) S.key = hexToRgb(o.key);
     const warnings = [];
     let image = o.image, rowInfo = null;
+    if (o.project) {
+      // reuse a saved project (its keying, scale and alignment); pick = frame indices to use, repeats allowed
+      const p = JSON.parse(o.project);
+      if (o.pick) p.frames = o.pick.map(i => { if (!p.frames[i]) throw new Error(`pick: no frame ${i}`); return JSON.parse(JSON.stringify(p.frames[i])); });
+      p.name = o.name || p.name; p.effects = []; p.fxAssets = [];
+      if (o.loop !== undefined) p.loop = o.loop;
+      await loadProject(JSON.stringify(p));
+    } else {
     if (o.row) { rowInfo = await cropRow(o.image, o.row, o.key); image = rowInfo.url; }
     await openSource(image, o.name || 'sprite', { keepKey: !!o.key, autoPixel: S.smooth ? false : !o.pixel });
+    }
     if (o.frameCount && S.frames.length !== o.frameCount) warnings.push(`expected ${o.frameCount} frames, found ${S.frames.length}`);
-    if (o.targetHeight) {
+    if (o.targetHeight && !o.project) {
       if (!S.smooth) throw new Error('targetHeight needs smooth mode');
       const k = Math.min(S.frames.length - 1, Math.max(0, (o.targetFrame || 1) - 1));
       for (let it = 0; it < 6; it++) {   // one scale for every frame; repeat because soft edges round by a pixel
@@ -2098,6 +2171,14 @@
     }
     if (o.durations) S.frames.forEach((f, i) => { if (o.durations[i] != null) f.dur = Math.max(10, Math.round(o.durations[i])); });
     if (o.impact !== undefined) S.impact = o.impact;
+    if (o.expand) {   // [left, top, right, bottom] px of room for effects; frames and guides keep their places
+      const [l = 0, t = 0, r = 0, b = 0] = o.expand;
+      S.cellW += l + r; S.cellH += t + b;
+      S.guides = { ...S.guides, cx: S.guides.cx + l, base: S.guides.base + t, top: S.guides.top + t, weapon: S.guides.weapon + t };
+      S.frames.forEach(f => { f.ox += l; f.oy += t; });
+    }
+    for (const spec of o.effects || []) await apiEffect(spec, warnings);
+    apiTiming = { top: o.timingExtra || null, frames: o.frameExtra || null };
     render();
     const want = new Set(o.outputs || ['project', 'all', 'frames', 'timing']);
     const got = collect = [];
@@ -2105,8 +2186,9 @@
       if (want.has('project')) saveProject();
       if (want.has('all')) await exportAll();
       if (want.has('frames')) await exportFrames();
+      if (want.has('fxframes')) await exportFxFrames();
       if (want.has('timing')) exportTiming();
-    } finally { collect = null; }
+    } finally { collect = null; apiTiming = null; }
     const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
     return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,
       scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, shrink: S.smooth ? S.pixel : null, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,

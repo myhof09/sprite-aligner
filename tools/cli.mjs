@@ -8,6 +8,8 @@
 //        [--durations 160,80,...] [--impact N|none] [--no-loop] [--left] [--outputs project,all,frames,timing]
 //        [--row N (1 = top row of a multi-row sheet)] [--frames N (expected count)]
 //        [--target-height PX [--target-frame K (1 = first)]]   (smooth mode: one scale so frame K is PX tall)
+//        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
+//                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
 //
 // Playwright: `npm i -D playwright` here, or point PLAYWRIGHT_DIR at a folder whose node_modules has it.
 
@@ -19,19 +21,34 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 if (!argv.length || argv.includes('--help')) {
-  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 13).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
+  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 15).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
   process.exit(argv.length ? 0 : 1);
 }
 const flag = n => argv.includes(`--${n}`);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
-const sheet = resolve(argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left'].includes(argv[i - 1]))));
-if (!existsSync(sheet)) { console.error(`no such file: ${sheet}`); process.exit(1); }
-const name = opt('name') || basename(sheet, extname(sheet));
-const out = resolve(opt('out') || dirname(sheet));
+const sheetArg = argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left'].includes(argv[i - 1])));
+const specPath = opt('spec') && resolve(opt('spec'));
+const spec = specPath ? JSON.parse(readFileSync(specPath, 'utf8')) : {};
+const rel = p => resolve(specPath ? dirname(specPath) : process.cwd(), p);
+const dataURL = (p, type = 'image/png') => `data:${type};base64,${readFileSync(rel(p)).toString('base64')}`;
+const sheet = sheetArg ? resolve(sheetArg) : spec.image && !spec.image.startsWith('data:') ? rel(spec.image) : null;
+const projectPath = spec.project && !spec.project.trim().startsWith('{') ? rel(spec.project) : null;
+if (!sheet && !projectPath && !spec.project) { console.error('give a sheet, or --spec with "image" or "project"'); process.exit(1); }
+if (sheet && !existsSync(sheet)) { console.error(`no such file: ${sheet}`); process.exit(1); }
+const src0 = sheet || projectPath;
+const name = opt('name') || spec.name || basename(src0, extname(src0)).replace(/\.sprite-aligner$/, '');
+const out = resolve(opt('out') || (spec.out ? rel(spec.out) : dirname(src0)));
 const num = n => (opt(n) !== undefined ? +opt(n) : undefined);
 
+for (const e of spec.effects || []) {
+  if (typeof e.recipe === 'string') e.recipe = JSON.parse(readFileSync(rel(e.recipe), 'utf8'));
+  if (e.sheet && e.sheet.png && !e.sheet.png.startsWith('data:')) e.sheet.png = dataURL(e.sheet.png);
+  if (e.sheet && typeof e.sheet.json === 'string') e.sheet.json = JSON.parse(readFileSync(rel(e.sheet.json), 'utf8'));
+}
 const o = {
-  image: `data:image/png;base64,${readFileSync(sheet).toString('base64')}`,
+  ...spec,
+  ...(sheet ? { image: `data:image/png;base64,${readFileSync(sheet).toString('base64')}` } : {}),
+  ...(projectPath ? { project: readFileSync(projectPath, 'utf8') } : {}),
   name,
   smooth: flag('smooth') || undefined, shrink: num('shrink'), pixel: num('pixel'), key: opt('key'), tol: num('tol'),
   keyEdge: flag('all-bg') ? false : undefined, fringe: flag('fringe') || undefined, despill: num('despill'), pad: num('pad'),
@@ -41,6 +58,8 @@ const o = {
   outputs: opt('outputs') ? opt('outputs').split(',') : undefined,
   row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
 };
+for (const k of Object.keys(o)) if (o[k] === undefined && spec[k] !== undefined) o[k] = spec[k];
+delete o.out;
 
 function loadPlaywright() {
   const bases = [process.env.PLAYWRIGHT_DIR, ROOT, process.cwd()].filter(Boolean);
