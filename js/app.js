@@ -2170,6 +2170,13 @@
    *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
    *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
    *     is exactly targetHeight px tall.
+   *   extract [{ name, frame (0-based, default 0), at [x, y] (cell px: the piece there) | box [x, y, w, h] (cell px: the
+   *     biggest detached piece inside), erase [frames] (erase the piece's pixels there), minAlpha (40), pivot 'ground' | 'center',
+   *     file (output path without .png, relative to out; default name), showFrame (0-based, default frame),
+   *     offsetKey / frameKey (also write the offset / show frame under these top-level timing keys) }]: a separate prop
+   *     (the web tool's "move to FX layer", as a file): <file>.png + <file>.json (pivot, offset from the character pivot);
+   *     timing props.<name> = { file, frame, offset }. The piece = its solid pixels (alpha > minAlpha) + the faint rim within
+   *     2 px of it that does not touch the body (the frame's biggest piece).
    *   anchors [{ name, color '#rrggbb', tol (40), box [x, y, w, h] cell px, point 'bbox' | 'mean' | 'extreme' | 'lowest',
    *     side, frames [indices] (default all) }]: per-frame part anchors -> timing frames[].<name> = { x, y } (cell px),
    *     found on the finished frames (after erase / islands); a frame without the colour gets no entry (warning).
@@ -2507,6 +2514,45 @@
         warnings.push(`cell grown by [${l}, ${t}, ${r}, ${b}] so effects are not cut`);
       }
     }
+    const props = [];   // extracted pieces, saved with the other outputs below
+    let timingTop = o.timingExtra ? { ...o.timingExtra } : null;
+    for (const ex of o.extract || []) {
+      const fi = ex.frame || 0, f = S.frames[fi];
+      if (!f) { warnings.push(`extract ${ex.name}: no frame ${fi}`); continue; }
+      const thr = ex.minAlpha ?? 40, m = frameMap(f), cellOf = k => [f.ox + KX(k), f.oy + KY(k)];
+      const solid = new Map([...m].filter(([, c]) => c[3] > thr));
+      const groups = IO.groups(solid).sort((a, b) => b.length - a.length);
+      const inBox = k => { const [x, y] = cellOf(k), b = ex.box; return x >= b[0] && y >= b[1] && x < b[0] + b[2] && y < b[1] + b[3]; };
+      const core = ex.at ? groups.find(g => g.some(k => { const [x, y] = cellOf(k); return Math.abs(x - ex.at[0]) <= 1 && Math.abs(y - ex.at[1]) <= 1; }))
+        : ex.box ? groups.slice(1).find(g => g.every(inBox)) : groups[1];
+      if (!core) { warnings.push(`extract ${ex.name}: no piece found`); continue; }
+      if (core === groups[0]) warnings.push(`extract ${ex.name}: the piece is the frame's biggest one (the body?)`);
+      const coreSet = new Set(core), body = new Set(groups[0] === core ? [] : groups[0]);
+      const near = (set, k, r) => { for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) if (set.has(K(KX(k) + dx, KY(k) + dy))) return true; return false; };
+      const piece = new Set(core);
+      for (const k of m.keys()) if (!solid.has(k) && near(coreSet, k, 2) && !near(body, k, 1)) piece.add(k);
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, cx0 = Infinity, cx1 = -Infinity, cy0 = Infinity, cy1 = -Infinity;
+      for (const k of piece) { const [x, y] = cellOf(k); x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+      for (const k of core) { const [x, y] = cellOf(k); cx0 = Math.min(cx0, x); cy0 = Math.min(cy0, y); cx1 = Math.max(cx1, x); cy1 = Math.max(cy1, y); }
+      const w = x1 - x0 + 1, h = y1 - y0 + 1, data = new Uint8ClampedArray(w * h * 4);
+      for (const k of piece) { const [x, y] = cellOf(k), c = m.get(k), i = ((y - y0) * w + (x - x0)) * 4; data[i] = c[0]; data[i + 1] = c[1]; data[i + 2] = c[2]; data[i + 3] = c[3]; }
+      const gx = (cx0 + cx1 + 1) / 2, gy = ex.pivot === 'center' ? (cy0 + cy1 + 1) / 2 : cy1 + 1;   // from the solid core
+      const offset = { x: Math.round(gx - S.guides.cx), y: Math.round(gy - S.guides.base) };
+      const file = ex.file || ex.name, showFrame = ex.showFrame ?? fi;
+      props.push({ file, canvas: toCanvas({ w, h, data }), json: { name: ex.name, file: `${file.split('/').pop()}.png`, width: w, height: h,
+        pivot: { x: Math.round(gx - x0), y: Math.round(gy - y0) }, pivotType: ex.pivot || 'ground', cellBox: [x0, y0, w, h], offset,
+        source: { animation: S.name, frame: fi } } });
+      for (const ei of ex.erase || []) {
+        const g = S.frames[ei]; if (!g) continue;
+        for (const k of piece) { const [x, y] = cellOf(k); g.edits.set(K(x - g.ox, y - g.oy), [0, 0, 0, 0]); }
+        compose(g);
+      }
+      timingTop = timingTop || {};
+      timingTop.props = { ...(timingTop.props || {}), [ex.name]: { file: `${file}.png`, frame: showFrame, offset } };
+      if (ex.offsetKey) timingTop[ex.offsetKey] = offset;
+      if (ex.frameKey) timingTop[ex.frameKey] = showFrame;
+      warnings.push(`extract ${ex.name}: ${piece.size} px from frame ${fi}${(ex.erase || []).length ? `, erased from ${ex.erase.join(', ')}` : ''}`);
+    }
     let frameExtra = o.frameExtra || null;
     if (o.anchors && o.anchors.length) {   // part anchors (shield face, crystal tip, ...) -> timing frames[].<name>
       frameExtra = S.frames.map((f, i) => ({ ...((o.frameExtra || [])[i] || {}) }));
@@ -2519,7 +2565,7 @@
         });
       }
     }
-    apiTiming = { top: o.timingExtra || null, frames: frameExtra };
+    apiTiming = { top: timingTop, frames: frameExtra };
     render();
     const want = new Set(o.outputs || ['project', 'all', 'frames', 'timing']);
     const got = collect = [];
@@ -2529,6 +2575,10 @@
       if (want.has('frames')) await exportFrames();
       if (want.has('fxframes')) await exportFxFrames();
       if (want.has('timing')) exportTiming();
+      for (const pr of props) {   // extracted props: always written (they are what was asked for)
+        await savePNG(pr.canvas, `${pr.file}.png`);
+        download(new Blob([JSON.stringify(pr.json, null, 1)], { type: 'application/json' }), `${pr.file}.json`);
+      }
     } finally { collect = null; apiTiming = null; }
     const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
     return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,

@@ -15,6 +15,8 @@
 //             found from the silhouettes and N evenly spaced frames are processed like a sheet row
 //        [--anchor-out name=PART --anchor-color #rrggbb [--anchor-box x,y,w,h (cell px)] [--anchor-tol N (40)]
 //             [--anchor-point bbox|mean|extreme|lowest (bbox)]]   (repeatable group: per-frame part anchor -> timing frames[].PART)
+//        [--extract name=PIECE --extract-frame N (0-based) [--extract-at x,y | --extract-box x,y,w,h] [--extract-erase 2,3]
+//             [--extract-file path/without/ext] [--extract-pivot ground|center]]   (repeatable: a piece -> its own PNG + pivot JSON)
 //        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
 //                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
 //
@@ -74,9 +76,11 @@ const o = {
   keyTint: num('key-tint'), edgeNeutral: flag('edge-neutral') || undefined,
   row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
   anchors: anchorArgs(),
+  extract: extractArgs(),
 };
 if (!o.remap.length) o.remap = spec.remap;
 if (!o.anchors.length) o.anchors = spec.anchors;
+if (!o.extract.length) o.extract = spec.extract;
 for (const k of Object.keys(o)) if (o[k] === undefined && spec[k] !== undefined) o[k] = spec[k];
 delete o.out;
 
@@ -93,6 +97,23 @@ function anchorArgs() {
     else if (a === '--anchor-point') cur.point = v;
   }
   for (const a of list) if (!a.color) { console.error(`anchor ${a.name}: --anchor-color is missing`); process.exit(1); }
+  return list;
+}
+
+/** --extract name=PIECE starts a piece; the --extract-* flags after it belong to it. */
+function extractArgs() {
+  const list = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i], v = argv[i + 1], cur = list[list.length - 1];
+    if (a === '--extract') list.push({ name: v.replace(/^name=/, '') });
+    else if (a.startsWith('--extract-') && !cur) { console.error(`${a} needs a --extract before it`); process.exit(1); }
+    else if (a === '--extract-frame') cur.frame = +v;
+    else if (a === '--extract-at') cur.at = nums(v);
+    else if (a === '--extract-box') cur.box = nums(v);
+    else if (a === '--extract-erase') cur.erase = nums(v);
+    else if (a === '--extract-file') cur.file = v;
+    else if (a === '--extract-pivot') cur.pivot = v;
+  }
   return list;
 }
 
@@ -193,7 +214,7 @@ try {
   await page.waitForFunction(() => window.SpriteAligner);
   const r = await page.evaluate(opts => window.SpriteAligner.run(opts), o);
   mkdirSync(out, { recursive: true });
-  for (const f of r.files) writeFileSync(join(out, f.name), Buffer.from(f.base64, 'base64'));
+  for (const f of r.files) { mkdirSync(dirname(join(out, f.name)), { recursive: true }); writeFileSync(join(out, f.name), Buffer.from(f.base64, 'base64')); }
   console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, shrink: r.shrink, row: r.row, video: videoVia && { via: videoVia, frames: o.videoFrames.length }, loop: r.loop, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
 } finally {
   await browser.close();
