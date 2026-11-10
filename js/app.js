@@ -692,6 +692,26 @@
     return { x: f.ox + f.x0 + KX(tip), y: f.oy + f.y0 + KY(tip) };
   }
 
+  /** Tips of the n longest blades of a frame (twin daggers, dual swords), cell px; [] when none. Same steel test as bladeTip. */
+  function bladeTipsN(f, n) {
+    const d = f.img.data, w = f.img.w, steel = new Map();
+    for (let y = 0; y < f.img.h; y++) for (let x = 0; x < w; x++) {
+      const j = (y * w + x) * 4;
+      if (!d[j + 3]) continue;
+      const mx = Math.max(d[j], d[j + 1], d[j + 2]), mn = Math.min(d[j], d[j + 1], d[j + 2]);
+      if ((d[j] + d[j + 1] + d[j + 2]) / 3 >= 170 && mx - mn <= 40) steel.set(K(x, y), 1);
+    }
+    const minLen = Math.max(10, f.img.h * 0.1), cx = f.anchor.bx, cy = f.anchor.by * 0.55, blades = [];
+    for (const g of IO.groups(steel)) {
+      const xs = g.map(KX), ys = g.map(KY), len = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      if (len < minLen) continue;
+      let tip = g[0], bd = -1;
+      for (const k of g) { const dd = (KX(k) - cx) ** 2 + (KY(k) - cy) ** 2; if (dd > bd) { bd = dd; tip = k; } }
+      blades.push({ score: len * len / g.length, x: f.ox + f.x0 + KX(tip), y: f.oy + f.y0 + KY(tip) });
+    }
+    return blades.sort((a, b) => b.score - a.score).slice(0, n).map(({ x, y }) => ({ x, y })).sort((a, b) => a.x - b.x);
+  }
+
   function findBladeTips(e) {
     let n = 0;
     for (let i = e.start; i < e.start + e.len && i < S.frames.length; i++) {
@@ -2011,7 +2031,8 @@
       frames: S.frames.map((f, i) => ({ index: i, file: `${S.name}_frame_${String(i + 1).padStart(2, '0')}.png`, duration_ms: f.dur,
         ...(S.effects.length ? { fx: `${S.name}_fx_${String(i + 1).padStart(2, '0')}.png` } : {}),
         ...(hasBack() ? { fxBack: `${S.name}_fxback_${String(i + 1).padStart(2, '0')}.png` } : {}),
-        ...(S.autoFx.tips.length === S.frames.length && S.autoFx.tips[i] ? { tip: { ...S.autoFx.tips[i] } } : {}) })),
+        ...(S.autoFx.tips.length === S.frames.length && S.autoFx.tips[i] ? { tip: { ...S.autoFx.tips[i] } } : {}),
+        ...(S.multiTips && S.multiTips.length === S.frames.length ? { tips: S.multiTips[i] } : {}) })),
       ...(S.effects.length ? { fxBlend: [...new Set(S.effects.map(e => ({ 'source-over': 'normal', lighter: 'add', screen: 'screen' })[e.blend]))] } : {}),
     };
   }
@@ -2142,6 +2163,7 @@
    *   keyTint N (also key pixels with the background's hue, tint >= N);
    *   erase [{ frame, poly: [[x, y], …] }] and removeIslands { max } (hand edits, kept in the project);
    *   remap [{ src: '#rrggbb', dst: '#rrggbb', tol }] (shading-preserving colour shift, before scaling);
+   *   tipsCount N (+ tipsN overrides): N blade tips per frame -> timing frames[].tips;
    *   tips { frame: {x, y} | at } (blade tip per frame: detected, these override); autoTrail (true | { style, shape, under });
    *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
    *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
@@ -2361,6 +2383,10 @@
         compose(f);
       }
       warnings.push(`removed ${gone} detached piece(s)`);
+    }
+    if (o.tipsCount > 1) {   // several blades: frames[].tips in the timing JSON (left to right), o.tipsN overrides { frame: [{x, y}, …] }
+      S.multiTips = S.frames.map((f, i) => (o.tipsN && o.tipsN[i]) || bladeTipsN(f, o.tipsCount));
+      S.frames.forEach((f, i) => { if (S.multiTips[i].length < o.tipsCount) warnings.push(`frame ${i + 1}: ${S.multiTips[i].length} of ${o.tipsCount} blades found`); });
     }
     if (o.tips || o.autoTrail) {
       // blade tip per frame: detected (gaps filled in between), then hand-set ones from o.tips { frame: {x, y} | {from, ...} }
