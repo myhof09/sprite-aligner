@@ -64,6 +64,8 @@ node tools/cli.mjs attack.png --out out --smooth --all-bg --fringe --pad 16 --al
 예: 검은 배경으로 구운 3D 이펙트 → `cli.mjs strip.png --grid 24x1 --key none --smooth --shrink 1 --pad 0 --trim 10 --drop-empty --pivot 128,151.5 --impact bright --blend add`;
 8×8 플립북 축소 → `cli.mjs fire.png --grid 8x8 --key none --smooth --shrink 5.333`.
 
+**머리 크기 검사 (`node tools/cli.mjs heads 애니폴더... --ref idle/frame_01.png [--tol 0.04] [--band 0.06] [--fix] [--report out.json]`)**: 완성된 프레임(폴더마다 timing.json)의 머리 크기를 기준 프레임(보통 그 직업의 idle 1프레임)과 비교합니다. 기준 실루엣 위 40%(머리카락+얼굴)와 몸통 띠(42–66%)를 각 프레임에서 0.7–1.45배로 찾아 배율을 잽니다. 자세 때문에 한 장씩의 값은 흔들리므로, 애니메이션 중앙값에서 `--band` 넘게 벗어나고 매칭이 좋은 프레임만 자기 값을 씁니다. 판정: ok / rescale(머리·몸통 둘 다 같은 쪽으로 다름: 다른 배율로 그려짐 → 머리 기준 정규화) / proportions(머리만 다르고 몸통은 정상: 늘리지 말고 다시 그리기) / unsure. `--fix`는 rescale 프레임을 발 기준점(timing pivot) 중심으로 같은 캔버스에서 다시 그리고 timing.json의 앵커(tip, tips…)도 같이 옮깁니다(`headScaleFix` 기록). 측면·회전·웅크린 자세는 오판할 수 있으니 고치기 전에 눈으로 확인하세요.
+
 **색 비교 (`node tools/cli.mjs measure frame.png --ref master.png [--box x,y,w,h] [--ref-box …] [--colors 14] [--min-share 2] [--min-diff 12]`)**: 두 그림의 불투명 픽셀을 함께 군집으로 나눠, 군집마다 프레임 쪽 중앙값과 마스터 쪽 중앙값을 비교하고 `--remap '#src>#dst,tol'` 제안을 출력합니다. 같은 색 계열(색상 30° 안, 또는 둘 다 회색조)만 짝짓고, 따뜻한 색(피부·갈색·금색)은 보여만 주고 제안하지 않습니다(금색 부품은 `box`를 준 규칙으로 직접). 작은 부품은 `--box`와 낮은 `--min-share`로 그 영역만 재세요.
 주의: `--row`를 쓰면 색 바꾸기 규칙의 `box`는 그 줄을 잘라낸 그림 기준 px입니다(결과의 `row.y[0]`만큼 위에서 뺌).
 

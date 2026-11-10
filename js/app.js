@@ -2684,6 +2684,65 @@
    * skin / eyes / browns are not remapped; gold parts need a hand rule with a box).
    * tol = 90th-percentile spread of the image's pixels around src, capped below half the distance to the next cluster.
    */
+  /**
+   * Head-size check across animations (finished frames, not a source sheet): o.ref = the reference frame (a class's idle
+   * frame 1), o.frames = [{ name, url, pivot: [x, y] feet }]. The reference head box = the top 40 % of its silhouette
+   * (hair + face); a torso band (42-66 %) is matched the same way. Per frame: head scale and torso scale vs the
+   * reference (template match, 0.7-1.45). verdict: ok | rescale (head and torso both off the same way: the frame was
+   * drawn at another scale, normalised by the head) | proportions (head off, torso in tolerance: do not distort,
+   * regenerate) | unsure (poor match / contradictory). With o.fix,
+   * 'rescale' frames come back rescaled by 1/scale around their feet pivot (same canvas), as PNG data URLs.
+   */
+  async function apiHeads(o) {
+    const load = async url => { const { img } = await loadImage(url); const m = new Uint8Array(img.w * img.h);
+      for (let p = 0; p < m.length; p++) m[p] = img.data[p * 4 + 3] > 127 ? 1 : 0; return { img, m }; };
+    const bbox = ({ img, m }) => { let x0 = img.w, y0 = img.h, x1 = -1, y1 = -1;
+      for (let y = 0; y < img.h; y++) for (let x = 0; x < img.w; x++) if (m[y * img.w + x]) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }; };
+    const band = (r, b, f0, f1) => {   // opaque column range inside rows [f0, f1) of the silhouette
+      const ya = Math.round(b.y + b.h * f0), yb = Math.round(b.y + b.h * f1);
+      let xa = r.img.w, xb = -1;
+      for (let y = ya; y < yb; y++) for (let x = 0; x < r.img.w; x++) if (r.m[y * r.img.w + x]) { if (x < xa) xa = x; if (x > xb) xb = x; }
+      return { x: Math.max(0, xa - 2), y: ya, w: Math.min(r.img.w - 1, xb + 2) - Math.max(0, xa - 2), h: yb - ya };
+    };
+    const ref = await load(o.ref), rb = bbox(ref);
+    const headBox = band(ref, rb, 0, 0.4), torsoBox = band(ref, rb, 0.42, 0.66);
+    const tol = o.tol ?? 0.04, maxCost = o.maxCost ?? 120, band6 = o.band ?? 0.06, out = [];
+    for (const fr of o.frames) {
+      const t = await load(fr.url), b = bbox(t);
+      const h = IO.matchHead(t.img, t.m, headBox, b, ref.img, ref.m, 0.6, 0.7, 1.45);
+      const k = IO.matchHead(t.img, t.m, torsoBox, b, ref.img, ref.m, 0.95, 0.7, 1.45);
+      out.push({ name: fr.name, pivot: fr.pivot, url: fr.url, head: h.s, headCost: Math.round(h.cost), torso: k.s, torsoCost: Math.round(k.cost) });
+    }
+    // per animation: poses (turned / tilted heads) make single estimates noisy, so frames near the animation's median
+    // head scale take the median (no jitter); a frame clearly away from it (> band, good match) keeps its own scale
+    const med = v => { const q = [...v].sort((a, b) => a - b); return q.length ? q[Math.floor(q.length / 2)] : 1; };
+    const good = out.filter(r => r.headCost <= maxCost);
+    const mh = med((good.length ? good : out).map(r => r.head)), mt = med(out.map(r => r.torso));
+    for (const r of out) {
+      const own = r.headCost <= maxCost && Math.abs(r.head - mh) > band6;
+      r.used = own ? r.head : mh;
+      r.verdict = 'ok';
+      if (Math.abs(r.used - 1) > tol) {
+        const torso = own ? r.torso : mt;
+        r.verdict = Math.abs(torso - 1) <= tol ? 'proportions' : (torso - 1) * (r.used - 1) > 0 ? 'rescale' : 'unsure';
+      }
+      if (own && r.verdict === 'rescale') r.verdict = 'rescale-own';
+      if (o.fix && r.verdict.startsWith('rescale')) {
+        const { canvas } = await loadImage(r.url), c = document.createElement('canvas');
+        c.width = canvas.width; c.height = canvas.height;
+        const g = c.getContext('2d'), sc = 1 / r.used, [px, py] = r.pivot;
+        g.imageSmoothingQuality = 'high';
+        g.translate(px, py); g.scale(sc, sc); g.translate(-px, -py);
+        g.drawImage(canvas, 0, 0);
+        r.png = c.toDataURL('image/png').split(',')[1];
+        r.scale = +sc.toFixed(4);
+      }
+      delete r.url; delete r.pivot;
+    }
+    return { refHead: headBox, refTorso: torsoBox, medianHead: mh, medianTorso: mt, frames: out };
+  }
+
   async function apiMeasure(o) {
     const pixels = async (url, box) => {
       const { img } = await loadImage(url), out = [];
@@ -2741,7 +2800,7 @@
     const h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
     return [h * 60, s, l];
   }
-  window.SpriteAligner = { run: apiRun, measure: apiMeasure, projectJSON, timingJSON };
+  window.SpriteAligner = { run: apiRun, measure: apiMeasure, heads: apiHeads, projectJSON, timingJSON };
 
   // ---------- start ----------
   bindInputs(); bindSource(); bindEditor(); bindEffects();

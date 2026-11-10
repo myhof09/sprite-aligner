@@ -53,6 +53,7 @@ const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1]
 const videoArg = opt('video') && resolve(opt('video'));
 const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral', '--extract-discard'].includes(argv[i - 1])));
 if (argv[0] === 'measure') { await measure(); process.exit(0); }
+if (argv[0] === 'heads') { await heads(); process.exit(0); }
 if (argv[0] === 'fx') { await fxCmd(); process.exit(0); }
 const specPath = opt('spec') && resolve(opt('spec'));
 const spec = specPath ? JSON.parse(readFileSync(specPath, 'utf8')) : {};
@@ -187,6 +188,48 @@ async function fxCmd() {
         (r.grew ? `, canvas grown x${r.grew}` : '') + (r.clipped ? ' (STILL CLIPPED)' : ''));
     }
   } finally { await browser.close(); }
+}
+
+/** heads <animDir>... --ref <idle frame> [--tol 0.04] [--fix]: head (+ torso) scale of every frame vs the reference;
+ *  --fix rescales 'rescale' frames in place around the animation's feet pivot and moves their timing.json anchors. */
+async function heads() {
+  const dirs = argv.slice(1).filter((a, i, l) => !a.startsWith('--') && !(i > 0 && ['--ref', '--tol', '--max-cost'].includes(l[i - 1])));
+  const ref = opt('ref');
+  if (!dirs.length || !ref) { console.error('heads <animDir>... --ref <idle_frame.png> [--tol 0.04] [--fix]'); process.exit(1); }
+  const url = p => `data:image/png;base64,${readFileSync(resolve(p)).toString('base64')}`;
+  const { chromium } = loadPlaywright();
+  const browser = await chromium.launch();
+  const report = [];
+  try {
+    const page = await browser.newPage();
+    await page.goto(pathToFileURL(join(ROOT, 'index.html')).href);
+    await page.waitForFunction(() => window.SpriteAligner);
+    for (const dir of dirs) {
+      const tp = join(resolve(dir), 'timing.json'), t = JSON.parse(readFileSync(tp, 'utf8'));
+      const pivot = [t.pivot.x, t.pivot.y];
+      const frames = t.frames.map(f => ({ name: f.file, url: url(join(resolve(dir), f.file)), pivot }));
+      const r = await page.evaluate(o => window.SpriteAligner.heads(o), { ref: url(ref), frames, tol: num('tol'), maxCost: num('max-cost'), band: num('band'), fix: flag('fix') });
+      console.log(`${dir}: median head ${Math.round(r.medianHead * 100)}%, torso ${Math.round(r.medianTorso * 100)}%`);
+      let fixed = 0;
+      r.frames.forEach((fr, i) => {
+        report.push({ anim: dir, ...fr, png: undefined });
+        console.log(`${dir}/${fr.name}  head ${Math.round(fr.head * 100)}% (cost ${fr.headCost})  torso ${Math.round(fr.torso * 100)}%  used ${Math.round(fr.used * 100)}%  ${fr.verdict}${fr.png ? '  -> rescaled' : ''}`);
+        if (!fr.png) return;
+        writeFileSync(join(resolve(dir), fr.name), Buffer.from(fr.png, 'base64'));
+        const s = fr.scale, mv = a => ({ ...a, x: Math.round((pivot[0] + (a.x - pivot[0]) * s) * 10) / 10, y: Math.round((pivot[1] + (a.y - pivot[1]) * s) * 10) / 10 });
+        const f = t.frames[i];
+        for (const k of Object.keys(f)) {
+          const v = f[k];
+          if (v && typeof v === 'object' && !Array.isArray(v) && 'x' in v && 'y' in v) f[k] = mv(v);
+          else if (Array.isArray(v) && v.every(a => a && typeof a === 'object' && 'x' in a)) f[k] = v.map(mv);
+        }
+        f.headScaleFix = s;
+        fixed++;
+      });
+      if (fixed) writeFileSync(tp, JSON.stringify(t, null, 1));
+    }
+  } finally { await browser.close(); }
+  if (opt('report')) writeFileSync(resolve(opt('report')), JSON.stringify(report, null, 1));
 }
 
 /** measure <image> --ref <master>: colour clusters vs the master, suggested --remap pairs. */

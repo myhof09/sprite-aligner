@@ -668,11 +668,11 @@ const IO = (() => {
    * first, then a fine search around the best hit. Returns {s, x, y, w, h, cost}: s > 1 = this head is drawn bigger.
    * Only the upper 60% of the box is searched (heads are on top; crouching frames are just shorter).
    */
-  function matchHead(img, mask, ref, box) {
+  function matchHead(img, mask, ref, box, src = img, srcMask = mask, yFrac = 0.6, sMin = 0.8, sMax = 1.2) {
     const { w, h, data } = img, T = [];
-    for (let y = 0; y < ref.h; y += 3) for (let x = 0; x < ref.w; x += 3) {
-      const p = (ref.y + y) * w + ref.x + x;
-      T.push(x, y, mask[p] ? 1 : 0, data[p * 4], data[p * 4 + 1], data[p * 4 + 2]);
+    for (let y = 0; y < ref.h; y += 3) for (let x = 0; x < ref.w; x += 3) {   // template: ref box of src (default: same image)
+      const p = (ref.y + y) * src.w + ref.x + x;
+      T.push(x, y, srcMask[p] ? 1 : 0, src.data[p * 4], src.data[p * 4 + 1], src.data[p * 4 + 2]);
     }
     const cost = (s, ox, oy) => {
       let c = 0;
@@ -688,14 +688,14 @@ const IO = (() => {
     let best = { cost: Infinity };
     const search = (s0, s1, ss, x0, x1, y0, y1, step) => {
       for (let s = s0; s <= s1 + 1e-9; s += ss) {
-        const xe = Math.min(x1, box.x + box.w - ref.w * s + 4), ye = Math.min(y1, box.y + box.h * 0.6 - ref.h * s + 4);
+        const xe = Math.min(x1, box.x + box.w - ref.w * s + 4), ye = Math.min(y1, box.y + box.h * yFrac - ref.h * s + 4);
         for (let oy = y0; oy <= ye; oy += step) for (let ox = x0; ox <= xe; ox += step) {
           const c = cost(s, ox, oy);
           if (c < best.cost) best = { s, x: ox, y: oy, cost: c };
         }
       }
     };
-    search(0.8, 1.2, 0.04, box.x - 4, box.x + box.w, box.y - 4, box.y + box.h, 4);
+    search(sMin, sMax, 0.04, box.x - 4, box.x + box.w, box.y - 4, box.y + box.h, 4);
     const b = best;
     search(b.s - 0.04, b.s + 0.04, 0.01, b.x - 4, b.x + 4, b.y - 4, b.y + 4, 1);
     return { ...best, s: +best.s.toFixed(2), w: Math.round(ref.w * best.s), h: Math.round(ref.h * best.s) };
