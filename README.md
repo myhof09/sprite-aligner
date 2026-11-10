@@ -55,6 +55,8 @@ node tools/cli.mjs attack.png --out out --smooth --all-bg --fringe --pad 16 --al
 
 **조각 떼어내기 (`--extract name=PIECE --extract-frame N [--extract-at x,y | --extract-box x,y,w,h] [--extract-erase 2,3] [--extract-file 경로] [--extract-pivot ground|center]`)**: 웹 도구의 "FX 레이어로 옮기기"를 파일로. 프레임 N(0부터)에서 그 점의 조각(또는 상자 안 가장 큰 떨어진 조각)을 골라(불투명 > 40인 픽셀 + 몸에 닿지 않는 2 px 안쪽 흐린 가장자리) `PIECE.png` + `PIECE.json`(기준점: 바닥 가운데 / 가운데, 캐릭터 기준점에서의 offset)으로 내보내고, 고른 프레임들에서 지웁니다(손 수정으로 남아 웹 도구에서 되돌릴 수 있음). 타이밍 JSON에 `props.PIECE = { file, frame, offset }`; 작업 파일에서는 `"extract": [{ …, "showFrame", "offsetKey": "trapOffset", "frameKey": "trapFrame" }]`로 원하는 키 이름에도 씁니다. `--extract-discard`(`"discard": true`)는 파일 없이 지우기만 합니다(번진 빛 얼룩 등). 작업 파일의 `"erase": [{ "frame", "poly", "minLight": 170 }]`은 다각형 안의 밝은 픽셀(가장 밝은 채널 ≥ minLight)만 지워, 옆 외곽선은 남기고 흐린 빛만 지웁니다. 프레임 번호는 모두 0부터(impactFrame과 같음).
 
+**이펙트만 내보내기 (`node tools/cli.mjs fx 레시피.safx.json... --out DIR [--size PX] [--hue DEG] [--speed X] [--blend add|normal] [--impact-hold MS]`)**: "이펙트만" 모드의 내보내기를 화면 없이 합니다. sa-fx 레시피마다 스프라이트 시트 PNG + 메타 JSON(fps, durations, impactFrame, blend, pivot). 그림이 캔버스 끝에 닿으면 같은 픽셀 크기로 캔버스만 키워 다시 그립니다(잘림 없음).
+
 **색 비교 (`node tools/cli.mjs measure frame.png --ref master.png [--box x,y,w,h] [--ref-box …] [--colors 14] [--min-share 2] [--min-diff 12]`)**: 두 그림의 불투명 픽셀을 함께 군집으로 나눠, 군집마다 프레임 쪽 중앙값과 마스터 쪽 중앙값을 비교하고 `--remap '#src>#dst,tol'` 제안을 출력합니다. 같은 색 계열(색상 30° 안, 또는 둘 다 회색조)만 짝짓고, 따뜻한 색(피부·갈색·금색)은 보여만 주고 제안하지 않습니다(금색 부품은 `box`를 준 규칙으로 직접). 작은 부품은 `--box`와 낮은 `--min-share`로 그 영역만 재세요.
 주의: `--row`를 쓰면 색 바꾸기 규칙의 `box`는 그 줄을 잘라낸 그림 기준 px입니다(결과의 `row.y[0]`만큼 위에서 뺌).
 

@@ -21,6 +21,10 @@
 //        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
 //                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
 //
+//   node tools/cli.mjs fx <recipe.safx.json>... [--out DIR] [--size PX] [--hue DEG] [--speed X] [--blend add|normal]
+//        [--impact-hold MS]   sa-fx recipes -> sprite sheet + meta JSON (the "이펙트만" export, headless); a drawing that
+//        touches the canvas edge is re-rendered on a bigger canvas at the same pixel size (never clipped)
+//
 //   node tools/cli.mjs measure <image.png> --ref <master.png> [--box x,y,w,h] [--ref-box x,y,w,h] [--colors 14]
 //        [--min-share 2] [--min-diff 12]   colour clusters vs the master -> suggested --remap pairs (skin / browns / gold
 //        are listed but never suggested; gold parts need a hand rule with a box)
@@ -45,6 +49,7 @@ const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1]
 const videoArg = opt('video') && resolve(opt('video'));
 const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral', '--extract-discard'].includes(argv[i - 1])));
 if (argv[0] === 'measure') { await measure(); process.exit(0); }
+if (argv[0] === 'fx') { await fxCmd(); process.exit(0); }
 const specPath = opt('spec') && resolve(opt('spec'));
 const spec = specPath ? JSON.parse(readFileSync(specPath, 'utf8')) : {};
 const rel = p => resolve(specPath ? dirname(specPath) : process.cwd(), p);
@@ -117,6 +122,58 @@ function extractArgs() {
     else if (a === '--extract-discard') cur.discard = true;
   }
   return list;
+}
+
+/** fx <recipe>...: render sa-fx recipes to sheet PNG + meta JSON. */
+async function fxCmd() {
+  const recipes = [];
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i].startsWith('--')) { i++; continue; }
+    recipes.push(resolve(argv[i]));
+  }
+  if (!recipes.length) { console.error('fx <recipe.safx.json>... [--out DIR]'); process.exit(1); }
+  const outDir = resolve(opt('out') || '.');
+  mkdirSync(outDir, { recursive: true });
+  const { chromium } = loadPlaywright();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(pathToFileURL(join(ROOT, 'index.html')).href);
+    await page.waitForFunction(() => window.SpriteAligner && typeof FXMODE !== 'undefined');
+    for (const file of recipes) {
+      const recipe = JSON.parse(readFileSync(file, 'utf8'));
+      const name = basename(file).replace(/\.safx\.json$|\.json$/, '');
+      const o = { name, recipe, size: num('size'), hue: num('hue') || 0, speed: num('speed') || 1, blend: opt('blend'),
+        hold: num('impact-hold') || 0 };
+      const r = await page.evaluate(async o => {
+        const touches = c => {
+          const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, w = c.width, h = c.height;
+          for (let x = 0; x < w; x++) if (d[(x) * 4 + 3] || d[((h - 1) * w + x) * 4 + 3]) return true;
+          for (let y = 0; y < h; y++) if (d[(y * w) * 4 + 3] || d[(y * w + w - 1) * 4 + 3]) return true;
+          return false;
+        };
+        let recipe = o.recipe, grew = 0, out, e;
+        for (;;) {
+          const size = o.size ? Math.round(o.size * (recipe.size || 64) / (o.recipe.size || 64)) : (recipe.size || 64);
+          e = { name: o.name, recipe, size, hue: o.hue, speed: o.speed, blend: o.blend || recipe.blend || 'add',
+            impactFrame: -1, impactHold: o.hold, loop: null, slash: {} };
+          out = FXMODE.renderFx(e);
+          if (!out.frames.some(touches) || grew >= 4) break;
+          recipe = { ...recipe, size: Math.round((recipe.size || 64) * 1.5) };   // same pixel sizes, bigger canvas
+          grew++;
+        }
+        const c = document.createElement('canvas');
+        c.width = out.N * out.frames.length; c.height = out.N;
+        out.frames.forEach((fr, i) => c.getContext('2d').drawImage(fr, i * out.N, 0));
+        const meta = FXMODE.metaOf(e, out, o.name);
+        return { png: c.toDataURL('image/png').split(',')[1], meta, grew, clipped: out.frames.some(touches) };
+      }, o);
+      writeFileSync(join(outDir, `${name}.png`), Buffer.from(r.png, 'base64'));
+      writeFileSync(join(outDir, `${name}.json`), JSON.stringify(r.meta, null, 1));
+      console.log(`${name}: ${r.meta.frameCount} frames ${r.meta.frameWidth}px, impact ${r.meta.impactFrame}, ${r.meta.blend}` +
+        (r.grew ? `, canvas grown x${r.grew}` : '') + (r.clipped ? ' (STILL CLIPPED)' : ''));
+    }
+  } finally { await browser.close(); }
 }
 
 /** measure <image> --ref <master>: colour clusters vs the master, suggested --remap pairs. */
