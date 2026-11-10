@@ -450,8 +450,58 @@
 
   /** Render a recipe into asset fields (frames, durations, …). `slash` = trail shape / slash controls (optional). */
   function renderRecipe(recipe, ropts, slash = null) {
-    const r = SAFX.render(slash ? SAFX_LIB.apply(recipe, slash) : recipe, ropts);
-    return { name: recipe.name || '레시피', frames: r.frames, durations: r.durations, loop: r.loop, game: r.game, warnings: r.warnings, recipe, ropts, slash };
+    let r = SAFX.render(slash ? SAFX_LIB.apply(recipe, slash) : recipe, ropts), used = recipe;
+    // never clip: a recipe whose drawing reaches the canvas edge is re-rendered on a bigger canvas (same pixel sizes)
+    for (let k = 0; k < 4 && r.frames.some(touchesEdge); k++) {
+      const grown = growRecipe(used, 1.5);
+      if (!grown) { r.warnings = [...(r.warnings || []), '캔버스 끝에서 잘림 (최대 크기)']; break; }
+      used = grown;
+      r = SAFX.render(slash ? SAFX_LIB.apply(used, slash) : used, ropts);
+    }
+    if (used !== recipe && !r.frames.some(touchesEdge)) r.warnings = [...(r.warnings || []), `캔버스를 ${used.size}px로 키움 (잘림 방지)`];
+    return { name: recipe.name || '레시피', frames: r.frames, durations: r.durations, loop: r.loop, game: r.game, warnings: r.warnings, recipe: used, ropts, slash };
+  }
+
+  const visCache = new WeakMap();
+  /** Bounding box { x0, y0, x1, y1 } (x1 / y1 exclusive) of the drawn pixels of a canvas, or null when empty. */
+  function visibleBox(c) {
+    if (visCache.has(c)) return visCache.get(c);
+    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+    if (c.width && c.height) {
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) if (d[(y * c.width + x) * 4 + 3]) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    const v = x1 < 0 ? null : { x0, y0, x1: x1 + 1, y1: y1 + 1 };
+    visCache.set(c, v);
+    return v;
+  }
+
+  /** Any visible pixel on the outermost row / column of a frame canvas. */
+  function touchesEdge(c) {
+    if (!c || !c.width || !c.height) return false;
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, w = c.width, h = c.height;
+    for (let x = 0; x < w; x++) if (d[x * 4 + 3] || d[((h - 1) * w + x) * 4 + 3]) return true;
+    for (let y = 0; y < h; y++) if (d[y * w * 4 + 3] || d[(y * w + w - 1) * 4 + 3]) return true;
+    return false;
+  }
+
+  /** Copy of a recipe on an m× bigger canvas: lengths stay in pixels, positions (canvas fractions) keep their place. */
+  function growRecipe(recipe, m) {
+    const size = recipe.size || 64, to = Math.min(512, Math.round(size * m));
+    if (to <= size) return null;
+    const k = to / size, r = JSON.parse(JSON.stringify(recipe));
+    r.size = to;
+    const remap = v => (Array.isArray(v) ? v.map(key => [key[0], 0.5 + (key[1] - 0.5) / k, ...key.slice(2)]) : 0.5 + (v - 0.5) / k);
+    for (const L of r.layers || []) {
+      const def = (SAFX.DEF && SAFX.DEF[L.type]) || {};
+      for (const f of ['x', 'y', 'x0', 'y0', 'x1', 'y1']) {
+        const v = L[f] !== undefined ? L[f] : def[f] !== undefined ? def[f] : (f === 'x' || f === 'y') ? 0.5 : undefined;
+        if (v !== undefined) L[f] = remap(v);
+      }
+    }
+    return r;
   }
 
   /** Built-in recipe by key: "slash:<name>" for slash recipes, else the other built-ins (spark, dust, …). */
@@ -584,8 +634,8 @@
   function fxPlaced(e, i) {
     const k = fxFrameAt(e, i);
     if (k < 0) return null;
-    const c = fxCanvas(e, k), p = fxPos(e, i);
-    return { c, k, x: Math.round(p.x - c.width / 2), y: Math.round(p.y - c.height / 2) };
+    const c = fxCanvas(e, k), p = fxPos(e, i), o = e.anchorOfs || [0, 0];   // anchorOfs: visible centre / bottom vs canvas centre
+    return { c, k, x: Math.round(p.x - c.width / 2 - o[0]), y: Math.round(p.y - c.height / 2 - o[1]) };
   }
 
   /** Draw every effect visible on frame i onto g (already in cell coordinates × z). */
@@ -1799,11 +1849,15 @@
   const hasFx = () => S.frames.some(f => f.fxCanvas);
 
   /** One row of equal cells. main/fx: which layers; flip: left-facing (each cell mirrored in place). */
+  // Browsers cannot save canvases wider than ~16k px: a sheet that would be wider wraps into rows (one row otherwise,
+  // so existing sheets are unchanged). The meta JSON gives every frame's x / y and the column count.
+  const MAX_SHEET = 16384;
+  const gridCols = (w, n) => Math.max(1, Math.min(n, Math.floor(MAX_SHEET / Math.max(1, w))));
   function sheetCanvas(opts) {
-    const c = document.createElement('canvas');
-    c.width = S.cellW * S.frames.length; c.height = S.cellH;
+    const c = document.createElement('canvas'), n = S.frames.length, cols = gridCols(S.cellW, n);
+    c.width = S.cellW * cols; c.height = S.cellH * Math.ceil(n / cols);
     const g = c.getContext('2d');
-    S.frames.forEach((_, i) => g.drawImage(cellCanvas(i, opts), i * S.cellW, 0));
+    S.frames.forEach((_, i) => g.drawImage(cellCanvas(i, opts), (i % cols) * S.cellW, Math.floor(i / cols) * S.cellH));
     return c;
   }
 
@@ -1821,10 +1875,10 @@
     return S.effects.map((e, j) => {
       const n = assets.get(e.asset).frames.length, cs = Array.from({ length: n }, (_, k) => fxCanvas(e, k));
       const w = Math.max(...cs.map(c => c.width)), h = Math.max(...cs.map(c => c.height));
-      const sheet = document.createElement('canvas');
-      sheet.width = w * n; sheet.height = h;
-      cs.forEach((c, k) => sheet.getContext('2d').drawImage(c, k * w + (w - c.width) / 2, (h - c.height) / 2));
-      return { e, sheet, w, h, n, image: `${S.name}_effect${j + 1}.png` };
+      const sheet = document.createElement('canvas'), cols = gridCols(w, n);
+      sheet.width = w * cols; sheet.height = h * Math.ceil(n / cols);
+      cs.forEach((c, k) => sheet.getContext('2d').drawImage(c, (k % cols) * w + (w - c.width) / 2, Math.floor(k / cols) * h + (h - c.height) / 2));
+      return { e, sheet, w, h, n, cols, image: `${S.name}_effect${j + 1}.png` };
     });
   }
 
@@ -1835,7 +1889,8 @@
     const m = {
       image: `${S.name}.png`,
       frameWidth: S.cellW, frameHeight: S.cellH, frameCount: S.frames.length,
-      frames: S.frames.map((f, i) => ({ index: i, x: i * S.cellW, y: 0, w: S.cellW, h: S.cellH, duration: f.dur })),
+      frames: S.frames.map((f, i) => { const cols = gridCols(S.cellW, S.frames.length); return { index: i, x: (i % cols) * S.cellW, y: Math.floor(i / cols) * S.cellH, w: S.cellW, h: S.cellH, duration: f.dur }; }),
+      ...(gridCols(S.cellW, S.frames.length) < S.frames.length ? { columns: gridCols(S.cellW, S.frames.length) } : {}),
       durations,
       totalDuration: durations.reduce((a, b) => a + b, 0),
       loop: S.loop,
@@ -1853,14 +1908,14 @@
     if (S.effects.length && merged()) m.effectsMerged = true;
     if (S.effects.length && !merged()) {
       const BLEND = { 'source-over': 'normal', lighter: 'add', screen: 'screen' };
-      m.effects = effectSheets().map(({ e, w, h, n, image }) => {
+      m.effects = effectSheets().map(({ e, w, h, n, cols, image }) => {
         const frames = [];
         for (let i = e.start; i < Math.min(S.frames.length, e.start + e.len); i++) {
-          const k = fxFrameAt(e, i), p = fxPos(e, i), x = Math.round(p.x - w / 2), y = Math.round(p.y - h / 2);
+          const k = fxFrameAt(e, i), p = fxPos(e, i), o = e.anchorOfs || [0, 0], x = Math.round(p.x - w / 2 - o[0]), y = Math.round(p.y - h / 2 - o[1]);
           frames.push({ charFrame: i, effectFrame: k, x, y, leftX: S.cellW - x - w });
         }
         const a = assets.get(e.asset);
-        return { name: e.name, image, frameWidth: w, frameHeight: h, frameCount: n, blend: BLEND[e.blend], opacity: e.opacity,
+        return { name: e.name, image, frameWidth: w, frameHeight: h, frameCount: n, ...(cols < n ? { columns: cols } : {}), blend: BLEND[e.blend], opacity: e.opacity,
           startFrame: e.start, length: e.len, flip: e.flip, rotation: e.rot, scale: e.scale, frames,
           ...(a.durations ? { durations: a.durations.map(d => Math.round(d)), offsetMs: Math.round(e.offset || 0), loop: !!a.loop } : {}),
           ...(a.recipe ? { recipe: a.recipe.name, impactFrame: a.game.impactFrame ?? null } : {}),
@@ -2094,7 +2149,26 @@
   /** Rows with any visible pixel in a frame's sprite. */
   const spriteHeight = f => { let t = -1, b = -1; for (let y = 0; y < f.img.h; y++) for (let x = 0; x < f.img.w; x++) if (f.img.data[(y * f.img.w + x) * 4 + 3]) { if (t < 0) t = y; b = y; break; } return t < 0 ? 0 : b - t + 1; };
 
-  /** Where an API effect goes: at = { from: 'feet' | 'center' | 'head' | 'tip' | 'point', frame, x, y, dx, dy }. */
+  /**
+   * Centre (cell px) of the biggest patch of a colour in frame f: at.color '#rrggbb', at.tol (default 40),
+   * at.side 'left' | 'right' (only that half of the sprite). Used to attach an effect to a body part (e.g. a shield face).
+   */
+  function colorAnchor(f, at) {
+    const c = hexToRgb(at.color), tol = at.tol || 40, { w, h, data } = f.img, m = new Map();
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (at.side === 'right' && x < w / 2) continue;
+      if (at.side === 'left' && x >= w / 2) continue;
+      const i = (y * w + x) * 4;
+      if (data[i + 3] > 128 && Math.hypot(data[i] - c[0], data[i + 1] - c[1], data[i + 2] - c[2]) <= tol) m.set(K(x, y), 1);
+    }
+    const g = IO.groups(m).sort((a, b) => b.length - a.length)[0];
+    if (!g) return null;
+    let sx = 0, sy = 0, y0 = Infinity, y1 = -Infinity;
+    for (const k of g) { sx += KX(k); sy += KY(k); y0 = Math.min(y0, KY(k)); y1 = Math.max(y1, KY(k)); }
+    return { x: f.ox + f.x0 + sx / g.length, y: f.oy + f.y0 + sy / g.length, h: y1 - y0 + 1 };
+  }
+
+  /** Where an API effect goes: at = { from: 'feet' | 'center' | 'head' | 'tip' | 'color' | 'point', frame, x, y, dx, dy } (color: + color, tol, side). */
   function apiPos(at = {}) {
     const k = Math.min(S.frames.length - 1, Math.max(0, at.frame || 0)), f = S.frames[k];
     const box = { x: f.ox + f.x0, y: f.oy + f.y0, w: f.img.w, h: f.img.h };
@@ -2103,6 +2177,7 @@
     else if (at.from === 'center') p = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
     else if (at.from === 'head') p = { x: box.x + box.w / 2, y: box.y + box.h * 0.2 };
     else if (at.from === 'tip') p = bladeTip(f) || { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    else if (at.from === 'color') p = colorAnchor(f, at) || { x: box.x + box.w / 2, y: box.y + box.h / 2 };
     else p = { x: S.guides.cx, y: S.guides.base };
     return { x: Math.round(p.x + (at.dx || 0)), y: Math.round(p.y + (at.dy || 0)) };
   }
@@ -2110,7 +2185,9 @@
   /**
    * One effect from the API: spec.recipe (sa-fx@1 object) or spec.sheet ({ png: data URL, json, name }: pixelfx or
    * Sprite Aligner sheet). start / len (character frames), at (see apiPos), follow: 'tip' (blade-tip keyframes),
-   * scale, rot, flip, blend ('add' | 'screen' | 'normal'), opacity, offsetMs, speed (recipe), under (draw behind the body).
+   * scale, rot, flip, blend ('add' | 'screen' | 'normal'), opacity, offsetMs, speed (recipe), under (draw behind the body),
+   * anchor: 'content' (visible centre on the point) | 'bottom' (visible bottom centre on the point, ground effects);
+   * default = canvas centre (pixelfx: its pivot); follow: 'tip' | 'color' (re-anchor every frame).
    */
   async function apiEffect(spec, warnings) {
     let a;
@@ -2129,6 +2206,22 @@
       blend: BLEND_FROM_GAME[spec.blend] || (a.game ? BLEND_FROM_GAME[a.game.blend] : null) || 'source-over',
       ...(spec.rot ? { rot: spec.rot, freeRot: spec.rot % 90 !== 0 } : {}),
     });
+    if (spec.anchor === 'content' || spec.anchor === 'bottom') {
+      // place the effect by what is drawn (all frames together), not by its canvas centre / pixelfx stand-in pivot
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, cw = 0, ch = 0;
+      for (let k = 0; k < a.frames.length; k++) {
+        const c = fxCanvas(e, k), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        cw = c.width; ch = c.height;
+        for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) if (d[(y * c.width + x) * 4 + 3]) {
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+      if (x1 >= 0) e.anchorOfs = [Math.round((x0 + x1 + 1) / 2 - cw / 2), Math.round((spec.anchor === 'bottom' ? y1 + 1 : (y0 + y1 + 1) / 2) - ch / 2)];
+    }
+    if (spec.follow === 'color' && spec.at) {   // re-find the colour patch on every frame of the effect
+      for (let i = e.start; i < Math.min(S.frames.length, e.start + e.len); i++) e.keys[i] = apiPos({ ...spec.at, frame: i });
+      e.follow = true;
+    }
     if (spec.follow === 'tip') {
       findBladeTips(e);
       const at = spec.at || {};
@@ -2178,6 +2271,21 @@
       S.frames.forEach(f => { f.ox += l; f.oy += t; });
     }
     for (const spec of o.effects || []) await apiEffect(spec, warnings);
+    if (S.effects.length && o.autoExpand !== false) {   // grow the cell so no placed effect is cut at its edge
+      let l = 0, t = 0, r = 0, b = 0;
+      for (const e of S.effects) for (let i = 0; i < S.frames.length; i++) {
+        const pl = fxPlaced(e, i), v = pl && visibleBox(pl.c);
+        if (!v) continue;   // (only drawn pixels count, not the empty padding of the effect canvas)
+        l = Math.max(l, -(pl.x + v.x0)); t = Math.max(t, -(pl.y + v.y0)); r = Math.max(r, pl.x + v.x1 - S.cellW); b = Math.max(b, pl.y + v.y1 - S.cellH);
+      }
+      if (l || t || r || b) {
+        S.cellW += l + r; S.cellH += t + b;
+        S.guides = { ...S.guides, cx: S.guides.cx + l, base: S.guides.base + t, top: S.guides.top + t, weapon: S.guides.weapon + t };
+        S.frames.forEach(f => { f.ox += l; f.oy += t; });
+        for (const e of S.effects) { e.x += l; e.y += t; for (const k of Object.keys(e.keys)) e.keys[k] = { x: e.keys[k].x + l, y: e.keys[k].y + t }; }
+        warnings.push(`cell grown by [${l}, ${t}, ${r}, ${b}] so effects are not cut`);
+      }
+    }
     apiTiming = { top: o.timingExtra || null, frames: o.frameExtra || null };
     render();
     const want = new Set(o.outputs || ['project', 'all', 'frames', 'timing']);
