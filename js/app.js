@@ -2170,6 +2170,9 @@
    *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
    *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
    *     is exactly targetHeight px tall.
+   *   anchors [{ name, color '#rrggbb', tol (40), box [x, y, w, h] cell px, point 'bbox' | 'mean' | 'extreme' | 'lowest',
+   *     side, frames [indices] (default all) }]: per-frame part anchors -> timing frames[].<name> = { x, y } (cell px),
+   *     found on the finished frames (after erase / islands); a frame without the colour gets no entry (warning).
    */
   /** Crop one row (1 = top) of a multi-row sheet: rows are the bands between empty horizontal gaps. */
   async function cropRow(url, row, keyHex) {
@@ -2202,13 +2205,18 @@
 
   /**
    * Centre (cell px) of the biggest patch of a colour in frame f: at.color '#rrggbb', at.tol (default 40),
-   * at.side 'left' | 'right' (only that half of the sprite). Used to attach an effect to a body part (e.g. a shield face).
+   * at.side 'left' | 'right' (only that half of the sprite), at.box [x, y, w, h] (cell px: only inside it).
+   * Point: at.point 'mean' (default: centre of mass) | 'bbox' (centre of the patch's bounding box) | 'extreme'
+   * (farthest from the body centre, e.g. a staff crystal tip; also at.extreme) | 'lowest' (bottom pixel, e.g. ground contact).
+   * Used to attach an effect to a body part (e.g. a shield face) and for timing anchors (o.anchors).
    */
   function colorAnchor(f, at) {
     const c = hexToRgb(at.color), tol = at.tol || 40, { w, h, data } = f.img, m = new Map();
+    const bx = f.ox + f.x0, by = f.oy + f.y0, bb = at.box;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
       if (at.side === 'right' && x < w / 2) continue;
       if (at.side === 'left' && x >= w / 2) continue;
+      if (bb && (bx + x < bb[0] || by + y < bb[1] || bx + x >= bb[0] + bb[2] || by + y >= bb[1] + bb[3])) continue;
       const i = (y * w + x) * 4;
       if (data[i + 3] > 128 && Math.hypot(data[i] - c[0], data[i + 1] - c[1], data[i + 2] - c[2]) <= tol) m.set(K(x, y), 1);
     }
@@ -2216,7 +2224,16 @@
     if (!g) return null;
     let sx = 0, sy = 0, y0 = Infinity, y1 = -Infinity;
     for (const k of g) { sx += KX(k); sy += KY(k); y0 = Math.min(y0, KY(k)); y1 = Math.max(y1, KY(k)); }
-    if (at.extreme) {   // the patch's point farthest from the body centre (e.g. the tip of a staff crystal)
+    if (at.point === 'bbox') {
+      let x0 = Infinity, x1 = -Infinity;
+      for (const k of g) { x0 = Math.min(x0, KX(k)); x1 = Math.max(x1, KX(k)); }
+      return { x: f.ox + f.x0 + (x0 + x1) / 2, y: f.oy + f.y0 + (y0 + y1) / 2, h: y1 - y0 + 1 };
+    }
+    if (at.point === 'lowest') {   // bottom pixel of the patch (middle of the bottom row), e.g. a staff touching the ground
+      const xs = g.filter(k => KY(k) === y1).map(KX);
+      return { x: f.ox + f.x0 + (Math.min(...xs) + Math.max(...xs)) / 2 + 0.5, y: f.oy + f.y0 + y1 + 0.5, h: y1 - y0 + 1 };
+    }
+    if (at.extreme || at.point === 'extreme') {   // the patch's point farthest from the body centre (e.g. the tip of a staff crystal)
       const cx = f.anchor ? f.anchor.bx : f.img.w / 2, cy = f.img.h * 0.45;
       let best = g[0], bd = -1;
       for (const k of g) { const d = (KX(k) - cx) ** 2 + (KY(k) - cy) ** 2; if (d > bd) { bd = d; best = k; } }
@@ -2490,7 +2507,19 @@
         warnings.push(`cell grown by [${l}, ${t}, ${r}, ${b}] so effects are not cut`);
       }
     }
-    apiTiming = { top: o.timingExtra || null, frames: o.frameExtra || null };
+    let frameExtra = o.frameExtra || null;
+    if (o.anchors && o.anchors.length) {   // part anchors (shield face, crystal tip, ...) -> timing frames[].<name>
+      frameExtra = S.frames.map((f, i) => ({ ...((o.frameExtra || [])[i] || {}) }));
+      for (const a of o.anchors) {
+        S.frames.forEach((f, i) => {
+          if (a.frames && !a.frames.includes(i)) return;
+          const p = colorAnchor(f, a);
+          if (!p) { warnings.push(`anchor ${a.name}: frame ${i + 1} has no ${a.color}`); return; }
+          frameExtra[i][a.name] = { x: Math.round(p.x), y: Math.round(p.y) };
+        });
+      }
+    }
+    apiTiming = { top: o.timingExtra || null, frames: frameExtra };
     render();
     const want = new Set(o.outputs || ['project', 'all', 'frames', 'timing']);
     const got = collect = [];
@@ -2506,7 +2535,76 @@
       scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, shrink: S.smooth ? S.pixel : null, loop: loopInfo, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
       files: await Promise.all(got.map(async f => ({ name: f.name, base64: await b64(f.blob) }))) };
   }
-  window.SpriteAligner = { run: apiRun, projectJSON, timingJSON };
+  /**
+   * SpriteAligner.measure(o): compare an image's colours with a reference master and suggest --remap pairs.
+   *   image, ref (data URLs); box / refBox [x, y, w, h] (only that region); colors (joint clusters, default 14);
+   *   minShare (% of the image's opaque pixels a cluster needs, default 2); minDiff (RGB distance worth a remap, default 12).
+   * Joint clustering: k-means on an equal sample of both images' opaque pixels (deterministic start: luminance quantiles),
+   * so one colour family present in both lands in one cluster; inside it, the image's median vs the master's median is
+   * the systematic shift -> src > dst. A cluster (almost) only one side has, or whose two medians are different colour families (hue > 30 deg apart,
+   * or one near-neutral), = no counterpart (reported, not suggested).
+   * Warm clusters (skin, browns, gold: hue 0-50 deg, saturation > 0.25) are listed but never suggested (standing rule:
+   * skin / eyes / browns are not remapped; gold parts need a hand rule with a box).
+   * tol = 90th-percentile spread of the image's pixels around src, capped below half the distance to the next cluster.
+   */
+  async function apiMeasure(o) {
+    const pixels = async (url, box) => {
+      const { img } = await loadImage(url), out = [];
+      const [x0, y0, bw, bh] = box || [0, 0, img.w, img.h];
+      for (let y = Math.max(0, y0); y < Math.min(img.h, y0 + bh); y++) for (let x = Math.max(0, x0); x < Math.min(img.w, x0 + bw); x++) {
+        const i = (y * img.w + x) * 4;
+        if (img.data[i + 3] > 200) out.push([img.data[i], img.data[i + 1], img.data[i + 2]]);
+      }
+      return out;
+    };
+    const sample = (px, n) => { const step = Math.max(1, Math.floor(px.length / n)); return px.filter((_, i) => i % step === 0); };
+    const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const median = v => { const q = [...v].sort((x, y) => x - y); return q[Math.floor(q.length / 2)]; };
+    const med3 = ps => [0, 1, 2].map(c => median(ps.map(p => p[c])));
+    const hex = c => '#' + c.map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+    const warm = c => { const [h, s] = rgbHsl(c); return h <= 50 && s > 0.25; };
+    const k = o.colors || 14, minShare = o.minShare ?? 2, minDiff = o.minDiff ?? 12;
+    const family = (x, y) => {   // same colour family: both coloured (chroma >= 30) with hue within 30 deg, or both greyish (< 40)
+      const cx = Math.max(...x) - Math.min(...x), cy = Math.max(...y) - Math.min(...y);
+      if (cx >= 30 && cy >= 30) { const hx = rgbHsl(x)[0], hy = rgbHsl(y)[0]; if (Math.min(Math.abs(hx - hy), 360 - Math.abs(hx - hy)) <= 30) return true; }
+      return cx < 40 && cy < 40;
+    };
+    const A = sample(await pixels(o.image, o.box), 30000), B = sample(await pixels(o.ref, o.refBox), 30000);
+    const pts = [...A.map(p => [p, 0]), ...B.map(p => [p, 1])];
+    const lum = c => c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114;
+    const sorted = pts.map(p => p[0]).sort((x, y) => lum(x) - lum(y));
+    let cs = Array.from({ length: k }, (_, j) => [...sorted[Math.floor((j + 0.5) * sorted.length / k)]]);
+    const lab = new Int32Array(pts.length);
+    for (let it = 0; it < 15; it++) {
+      const sum = cs.map(() => [0, 0, 0, 0]);
+      pts.forEach(([p], i) => { let b = 0, bd = Infinity; cs.forEach((c, j) => { const d = dist(p, c); if (d < bd) { bd = d; b = j; } }); lab[i] = b; const q = sum[b]; q[0] += p[0]; q[1] += p[1]; q[2] += p[2]; q[3]++; });
+      cs = cs.map((c, j) => (sum[j][3] ? [sum[j][0] / sum[j][3], sum[j][1] / sum[j][3], sum[j][2] / sum[j][3]] : c));
+    }
+    const rows = cs.map((c, j) => {
+      const mine = pts.filter((p, i) => lab[i] === j && p[1] === 0).map(p => p[0]), ref = pts.filter((p, i) => lab[i] === j && p[1] === 1).map(p => p[0]);
+      return { j, mine, ref, share: 100 * mine.length / A.length, refShare: 100 * ref.length / B.length };
+    }).filter(r => r.share >= minShare).sort((x, y) => y.share - x.share).map(r => {
+      const src = med3(r.mine), dst = r.ref.length ? med3(r.ref) : null;
+      const ds = r.mine.map(p => dist(p, src)).sort((x, y) => x - y), spread = ds[Math.floor(ds.length * 0.9)] || 0;
+      const next = Math.min(...cs.filter((_, j) => j !== r.j).map(c => dist(c, cs[r.j])));
+      const tol = Math.max(15, Math.min(60, Math.round(spread), Math.floor(next / 2)));
+      const d = dst && r.refShare >= 0.5 && family(src, dst) ? dist(src, dst) : Infinity;
+      const verdict = warm(src) ? 'warm (skin / brown / gold): not suggested' : !Number.isFinite(d) ? 'no counterpart in the master: check by hand'
+        : d < minDiff ? 'matches' : 'remap';
+      return { src: hex(src), share: +r.share.toFixed(1), ref: dst ? hex(dst) : '-------', refShare: +r.refShare.toFixed(1), diff: Number.isFinite(d) ? Math.round(d) : '-', tol, verdict };
+    });
+    return { clusters: rows, remap: rows.filter(r => r.verdict === 'remap').map(r => `--remap '${r.src}>${r.ref},${r.tol}'`) };
+  }
+  /** [hue deg, saturation 0-1, lightness 0-1] of an [r, g, b]. */
+  function rgbHsl([r, g, b]) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    if (!d) return [0, 0, l];
+    const s = d / (1 - Math.abs(2 * l - 1));
+    const h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [h * 60, s, l];
+  }
+  window.SpriteAligner = { run: apiRun, measure: apiMeasure, projectJSON, timingJSON };
 
   // ---------- start ----------
   bindInputs(); bindSource(); bindEditor(); bindEffects();

@@ -51,6 +51,11 @@ node tools/cli.mjs attack.png --out out --smooth --all-bg --fringe --pad 16 --al
 
 **작업 파일 (`--spec job.json`)**: `run`의 옵션을 JSON으로 적습니다(경로는 파일 기준 상대). 저장한 프로젝트를 다시 써서(`"project"`, `"pick": [0,0,0,1,…]` 프레임 고르기·반복) 이펙트를 얹을 수 있습니다: `"effects": [{ "recipe": "x.safx.json" | "sheet": { "png", "json" }, "start", "len", "at": { "from": "feet|center|head|tip|point", "x", "y", "dx", "dy", "frame" }, "scale", "blend", "opacity", "under": true(몸 뒤) }]`, `"expand": [왼, 위, 오른, 아래]`(이펙트 자리), `"timingExtra"` / `"frameExtra"`(타이밍 JSON에 넣을 값), 출력 `fxframes`(프레임마다 이펙트만: `이름_fx_01.png`). 웹 화면의 이펙트에도 **몸 뒤에 그리기**(under)가 반영됩니다.
 
+**부위 기준점 (`--anchor-out name=PART --anchor-color #rrggbb [--anchor-box x,y,w,h] [--anchor-tol 40] [--anchor-point bbox|mean|extreme|lowest]`)**: 프레임마다 그 색의 가장 큰 덩어리를 찾아 타이밍 JSON의 `frames[].PART = {x, y}`(셀 px)에 적습니다. 여러 번 줄 수 있고(`--anchor-out`마다 새 기준점), 작업 파일에서는 `"anchors": [{ "name", "color", "tol", "box": [x, y, w, h], "point", "frames": [0, 2] }]`. 점: `bbox` (기본, 덩어리 상자 가운데: 방패 면), `mean` (무게중심), `extreme` (몸 중심에서 가장 먼 점: 지팡이 수정 끝), `lowest` (맨 아래: 땅에 닿는 점). 지운 픽셀·섬 제거가 끝난 프레임에서 찾습니다.
+
+**색 비교 (`node tools/cli.mjs measure frame.png --ref master.png [--box x,y,w,h] [--ref-box …] [--colors 14] [--min-share 2] [--min-diff 12]`)**: 두 그림의 불투명 픽셀을 함께 군집으로 나눠, 군집마다 프레임 쪽 중앙값과 마스터 쪽 중앙값을 비교하고 `--remap '#src>#dst,tol'` 제안을 출력합니다. 같은 색 계열(색상 30° 안, 또는 둘 다 회색조)만 짝짓고, 따뜻한 색(피부·갈색·금색)은 보여만 주고 제안하지 않습니다(금색 부품은 `box`를 준 규칙으로 직접). 작은 부품은 `--box`와 낮은 `--min-share`로 그 영역만 재세요.
+주의: `--row`를 쓰면 색 바꾸기 규칙의 `box`는 그 줄을 잘라낸 그림 기준 px입니다(결과의 `row.y[0]`만큼 위에서 뺌).
+
 페이지 안에서는 `window.SpriteAligner.run({...})`로도 부를 수 있습니다(같은 옵션, 파일을 base64로 돌려줌).
 
 ## 메타 JSON 예

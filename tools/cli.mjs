@@ -13,8 +13,14 @@
 //        [--video clip.mp4 [--loop-pick N (default 8)] [--loop-steps 2] [--pick-frames 0,2,5,…] [--keep-frames DIR]]
 //             video input: frames via ffmpeg (PATH or FFMPEG), else decoded in Edge / Chrome; a seamless walk cycle is
 //             found from the silhouettes and N evenly spaced frames are processed like a sheet row
+//        [--anchor-out name=PART --anchor-color #rrggbb [--anchor-box x,y,w,h (cell px)] [--anchor-tol N (40)]
+//             [--anchor-point bbox|mean|extreme|lowest (bbox)]]   (repeatable group: per-frame part anchor -> timing frames[].PART)
 //        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
 //                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
+//
+//   node tools/cli.mjs measure <image.png> --ref <master.png> [--box x,y,w,h] [--ref-box x,y,w,h] [--colors 14]
+//        [--min-share 2] [--min-diff 12]   colour clusters vs the master -> suggested --remap pairs (skin / browns / gold
+//        are listed but never suggested; gold parts need a hand rule with a box)
 //
 // Playwright: `npm i -D playwright` here, or point PLAYWRIGHT_DIR at a folder whose node_modules has it.
 
@@ -26,13 +32,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 if (!argv.length || argv.includes('--help')) {
-  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 20).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
+  console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1).filter((l, i, a) => a.slice(0, i + 1).every(x => x.startsWith('//'))).map(l => l.replace(/^\/\/ ?/, '')).join('\n'));
   process.exit(argv.length ? 0 : 1);
 }
 const flag = n => argv.includes(`--${n}`);
+const nums = v => v.split(',').map(Number);
+const num = n => (opt(n) !== undefined ? +opt(n) : undefined);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
 const videoArg = opt('video') && resolve(opt('video'));
 const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral'].includes(argv[i - 1])));
+if (argv[0] === 'measure') { await measure(); process.exit(0); }
 const specPath = opt('spec') && resolve(opt('spec'));
 const spec = specPath ? JSON.parse(readFileSync(specPath, 'utf8')) : {};
 const rel = p => resolve(specPath ? dirname(specPath) : process.cwd(), p);
@@ -44,7 +53,6 @@ if (sheet && !existsSync(sheet)) { console.error(`no such file: ${sheet}`); proc
 const src0 = sheet || projectPath || videoArg;
 const name = opt('name') || spec.name || basename(src0, extname(src0)).replace(/\.sprite-aligner$/, '');
 const out = resolve(opt('out') || (spec.out ? rel(spec.out) : dirname(src0)));
-const num = n => (opt(n) !== undefined ? +opt(n) : undefined);
 
 for (const e of spec.effects || []) {
   if (typeof e.recipe === 'string') e.recipe = JSON.parse(readFileSync(rel(e.recipe), 'utf8'));
@@ -65,10 +73,48 @@ const o = {
   remap: argv.flatMap((a, i) => (a === '--remap' ? [argv[i + 1]] : [])).map(r => { const [m, tol, ...box] = r.split(','); const [src, dst] = m.split('>'); return { src, dst, tol: tol ? +tol : 60, ...(box.length === 4 ? { box: box.map(Number) } : {}) }; }),
   keyTint: num('key-tint'), edgeNeutral: flag('edge-neutral') || undefined,
   row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
+  anchors: anchorArgs(),
 };
 if (!o.remap.length) o.remap = spec.remap;
+if (!o.anchors.length) o.anchors = spec.anchors;
 for (const k of Object.keys(o)) if (o[k] === undefined && spec[k] !== undefined) o[k] = spec[k];
 delete o.out;
+
+/** --anchor-out name=PART starts an anchor; the --anchor-* flags after it belong to it. */
+function anchorArgs() {
+  const list = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i], v = argv[i + 1], cur = list[list.length - 1];
+    if (a === '--anchor-out') list.push({ name: v.replace(/^name=/, ''), point: 'bbox' });
+    else if (a.startsWith('--anchor-') && !cur) { console.error(`${a} needs a --anchor-out before it`); process.exit(1); }
+    else if (a === '--anchor-color') cur.color = v;
+    else if (a === '--anchor-box') cur.box = nums(v);
+    else if (a === '--anchor-tol') cur.tol = +v;
+    else if (a === '--anchor-point') cur.point = v;
+  }
+  for (const a of list) if (!a.color) { console.error(`anchor ${a.name}: --anchor-color is missing`); process.exit(1); }
+  return list;
+}
+
+/** measure <image> --ref <master>: colour clusters vs the master, suggested --remap pairs. */
+async function measure() {
+  const img = argv[1], ref = opt('ref');
+  if (!img || !ref) { console.error('measure <image.png> --ref <master.png> [--box x,y,w,h] [--ref-box x,y,w,h]'); process.exit(1); }
+  const url = p => `data:image/png;base64,${readFileSync(resolve(p)).toString('base64')}`;
+  const { chromium } = loadPlaywright();
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage();
+    await page.goto(pathToFileURL(join(ROOT, 'index.html')).href);
+    await page.waitForFunction(() => window.SpriteAligner);
+    const r = await page.evaluate(o => window.SpriteAligner.measure(o), {
+      image: url(img), ref: url(ref), box: opt('box') && nums(opt('box')), refBox: opt('ref-box') && nums(opt('ref-box')),
+      colors: num('colors'), minShare: num('min-share'), minDiff: num('min-diff') });
+    console.log('image     share  master   share  diff  tol  verdict');
+    for (const c of r.clusters) console.log(`${c.src}  ${String(c.share).padStart(5)}%  ${c.ref}  ${String(c.refShare).padStart(5)}%  ${String(c.diff).padStart(4)}  ${String(c.tol).padStart(3)}  ${c.verdict}`);
+    console.log(r.remap.length ? `\nsuggested:\n${r.remap.join('\n')}` : '\nno remap needed');
+  } finally { await browser.close(); }
+}
 
 function loadPlaywright() {
   const bases = [process.env.PLAYWRIGHT_DIR, ROOT, process.cwd()].filter(Boolean);
