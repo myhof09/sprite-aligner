@@ -640,12 +640,20 @@
 
   /** Draw every effect visible on frame i onto g (already in cell coordinates × z). */
   /** layer: 'over' (default) draws normal effects, 'under' the ones with e.under (afterimages behind the body). */
+  // e.split (ground effects): the half behind the anchor line (above it on screen) is drawn under the body, the front
+  // half over it, so a ring on the floor reads as lying around the feet.
   function drawEffects(g, i, z, layer = 'over') {
     for (const e of S.effects) {
-      if (!!e.under !== (layer === 'under')) continue;
+      if (!e.split && !!e.under !== (layer === 'under')) continue;
       const pl = fxPlaced(e, i);
       if (!pl) continue;
       g.save();
+      if (e.split) {
+        const cut = fxPos(e, i).y * z, big = 1e5;
+        g.beginPath();
+        if (layer === 'under') g.rect(-big, -big, 2 * big, big + cut); else g.rect(-big, cut, 2 * big, big);
+        g.clip();
+      }
       g.globalCompositeOperation = e.blend; g.globalAlpha = e.opacity;
       g.imageSmoothingEnabled = false;
       g.drawImage(pl.c, pl.x * z, pl.y * z, pl.c.width * z, pl.c.height * z);
@@ -1072,10 +1080,11 @@
     const c = document.createElement('canvas');
     c.width = S.cellW; c.height = S.cellH;
     const g = c.getContext('2d'), f = S.frames[i];
-    if (effects) drawEffects(g, i, 1, 'under');
+    // effects: true = both layers, 'under' / 'over' = only the part behind / in front of the body
+    if (effects === true || effects === 'under') drawEffects(g, i, 1, 'under');
     if (main) g.drawImage(f.canvas, f.ox + f.x0, f.oy + f.y0);
     if (fx && f.fxCanvas) g.drawImage(f.fxCanvas, f.ox + f.fx0, f.oy + f.fy0);
-    if (effects) drawEffects(g, i, 1);
+    if (effects === true || effects === 'over') drawEffects(g, i, 1);
     if (!flip) return c;
     const m = document.createElement('canvas');
     m.width = S.cellW; m.height = S.cellH;
@@ -1969,9 +1978,17 @@
   }
 
   /** Effects only, one PNG per character frame, same cell: <name>_fx_01.png ... (empty frames are empty PNGs). */
+  // With effects behind the body (under / split ground halves): <name>_fxback_01.png (draw before the character) and
+  // <name>_fx_01.png (after it); otherwise only <name>_fx_01.png with everything.
+  const hasBack = () => S.effects.some(e => e.under || e.split);
   async function exportFxFrames() {
     if (!S.frames.length) return;
-    for (let i = 0; i < S.frames.length; i++) await savePNG(cellCanvas(i, { main: false, fx: false, effects: true }), `${S.name}_fx_${String(i + 1).padStart(2, '0')}.png`);
+    const back = hasBack();
+    for (let i = 0; i < S.frames.length; i++) {
+      const n = String(i + 1).padStart(2, '0');
+      if (back) await savePNG(cellCanvas(i, { main: false, fx: false, effects: 'under' }), `${S.name}_fxback_${n}.png`);
+      await savePNG(cellCanvas(i, { main: false, fx: false, effects: back ? 'over' : true }), `${S.name}_fx_${n}.png`);
+    }
   }
 
   let apiTiming = null;   // API: extra fields for the timing JSON ({ top, frames: [ {...} per frame ] })
@@ -1988,7 +2005,9 @@
       pivot: { x: S.guides.cx, y: S.guides.base }, impactFrame: S.impact >= 0 ? S.impact : null,
       totalDuration: S.frames.reduce((a, f) => a + f.dur, 0),
       frames: S.frames.map((f, i) => ({ index: i, file: `${S.name}_frame_${String(i + 1).padStart(2, '0')}.png`, duration_ms: f.dur,
-        ...(S.effects.length ? { fx: `${S.name}_fx_${String(i + 1).padStart(2, '0')}.png` } : {}) })),
+        ...(S.effects.length ? { fx: `${S.name}_fx_${String(i + 1).padStart(2, '0')}.png` } : {}),
+        ...(hasBack() ? { fxBack: `${S.name}_fxback_${String(i + 1).padStart(2, '0')}.png` } : {}),
+        ...(S.autoFx.tips.length === S.frames.length && S.autoFx.tips[i] ? { tip: { ...S.autoFx.tips[i] } } : {}) })),
       ...(S.effects.length ? { fxBlend: [...new Set(S.effects.map(e => ({ 'source-over': 'normal', lighter: 'add', screen: 'screen' })[e.blend]))] } : {}),
     };
   }
@@ -2116,6 +2135,7 @@
    *   row: process only this row (1 = top) of a multi-row sheet; rows are found from the empty horizontal gaps.
    *   frameCount: expected number of frames (a warning is returned when the detection finds a different count).
    *   project (saved project text, instead of image) + pick [frame indices, repeats allowed]; expand [l, t, r, b];
+   *   tips { frame: {x, y} | at } (blade tip per frame: detected, these override); autoTrail (true | { style, shape });
    *   effects [see apiEffect]; timingExtra {...}; frameExtra [{...} per frame]; outputs also 'fxframes'.
    *   targetHeight (+ targetFrame, 1 = first): smooth mode only; one scale for the whole row so that frame's sprite
    *     is exactly targetHeight px tall.
@@ -2168,7 +2188,25 @@
     return { x: f.ox + f.x0 + sx / g.length, y: f.oy + f.y0 + sy / g.length, h: y1 - y0 + 1 };
   }
 
-  /** Where an API effect goes: at = { from: 'feet' | 'center' | 'head' | 'tip' | 'color' | 'point', frame, x, y, dx, dy } (color: + color, tol, side). */
+  /**
+   * Ground contact of frame f (cell px): the middle between the outermost boot pixels on the sole line (the lowest
+   * 4% of the sprite), y = the sole line itself. spread = boot-to-boot width (for sizing ground effects).
+   */
+  function soles(f) {
+    const { w, h, data } = f.img;
+    let bottom = -1;
+    for (let y = h - 1; y >= 0 && bottom < 0; y--) for (let x = 0; x < w; x++) if (data[(y * w + x) * 4 + 3] > 128) { bottom = y; break; }
+    if (bottom < 0) return { x: S.guides.cx, y: S.guides.base, spread: 0 };
+    const band = Math.max(2, Math.round(h * 0.04));
+    let x0 = Infinity, x1 = -1;
+    for (let y = bottom - band; y <= bottom; y++) for (let x = 0; x < w; x++) if (y >= 0 && data[(y * w + x) * 4 + 3] > 128) { if (x < x0) x0 = x; if (x > x1) x1 = x; }
+    return { x: f.ox + f.x0 + (x0 + x1 + 1) / 2, y: f.oy + f.y0 + bottom + 1, spread: x1 - x0 + 1 };
+  }
+
+  /** Blade tip of frame k: the tracked / hand-set tip (S.autoFx.tips) when there is one, else detected now. */
+  const tipOf = k => (S.autoFx.tips.length === S.frames.length && S.autoFx.tips[k]) || bladeTip(S.frames[k]);
+
+  /** Where an API effect goes: at = { from: 'feet' | 'center' | 'head' | 'tip' | 'color' | 'point', frame, x, y, dx, dy } (color: + color, tol, side; soles: ground contact between the boots). */
   function apiPos(at = {}) {
     const k = Math.min(S.frames.length - 1, Math.max(0, at.frame || 0)), f = S.frames[k];
     const box = { x: f.ox + f.x0, y: f.oy + f.y0, w: f.img.w, h: f.img.h };
@@ -2176,8 +2214,10 @@
     if (at.from === 'point') p = { x: at.x, y: at.y };
     else if (at.from === 'center') p = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
     else if (at.from === 'head') p = { x: box.x + box.w / 2, y: box.y + box.h * 0.2 };
-    else if (at.from === 'tip') p = bladeTip(f) || { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    else if (at.from === 'tip') p = tipOf(k) || { x: box.x + box.w / 2, y: box.y + box.h / 2 };
     else if (at.from === 'color') p = colorAnchor(f, at) || { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    else if (at.from === 'soles') p = soles(f);
+    else if (at.from === 'tipGround') { const t = tipOf(k); p = { x: t.x, y: soles(f).y }; }   // blade tip dropped onto the sole line
     else p = { x: S.guides.cx, y: S.guides.base };
     return { x: Math.round(p.x + (at.dx || 0)), y: Math.round(p.y + (at.dy || 0)) };
   }
@@ -2186,7 +2226,8 @@
    * One effect from the API: spec.recipe (sa-fx@1 object) or spec.sheet ({ png: data URL, json, name }: pixelfx or
    * Sprite Aligner sheet). start / len (character frames), at (see apiPos), follow: 'tip' (blade-tip keyframes),
    * scale, rot, flip, blend ('add' | 'screen' | 'normal'), opacity, offsetMs, speed (recipe), under (draw behind the body),
-   * anchor: 'content' (visible centre on the point) | 'bottom' (visible bottom centre on the point, ground effects);
+   * split: ground effect, back half under the body and front half over it (cut at the anchor line);
+   * anchor: 'core' (brightest pixels on the point) | 'content' (visible centre on the point) | 'bottom' (visible bottom centre on the point, ground effects);
    * default = canvas centre (pixelfx: its pivot); follow: 'tip' | 'color' (re-anchor every frame).
    */
   async function apiEffect(spec, warnings) {
@@ -2202,10 +2243,27 @@
     const id = addAsset(a), p = apiPos(spec.at);
     const e = addEffect(id, {
       start: Math.max(0, spec.start || 0), len: Math.max(1, spec.len || 1), x: p.x, y: p.y, offset: spec.offsetMs || 0,
-      scale: spec.scale || 1, flip: !!spec.flip, opacity: spec.opacity ?? 1, ...(spec.under ? { under: true } : {}),
+      scale: spec.scale || 1, flip: !!spec.flip, opacity: spec.opacity ?? 1, ...(spec.under ? { under: true } : {}), ...(spec.split ? { split: true } : {}),
       blend: BLEND_FROM_GAME[spec.blend] || (a.game ? BLEND_FROM_GAME[a.game.blend] : null) || 'source-over',
       ...(spec.rot ? { rot: spec.rot, freeRot: spec.rot % 90 !== 0 } : {}),
     });
+    if (spec.anchor === 'core') {
+      // place the effect by its brightest pixels (the core of an orb / flash), all frames together
+      let sx = 0, sy = 0, n = 0, cw = 0, ch = 0;
+      const lum = [];
+      for (let k = 0; k < a.frames.length; k++) {
+        const c = fxCanvas(e, k), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        cw = c.width; ch = c.height;
+        for (let q = 0; q < d.length; q += 4) if (d[q + 3]) lum.push(d[q] + d[q + 1] + d[q + 2]);
+      }
+      lum.sort((x, y) => x - y);
+      const thr = lum.length ? lum[Math.floor(lum.length * 0.9)] : 765;
+      for (let k = 0; k < a.frames.length; k++) {
+        const c = fxCanvas(e, k), d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) { const q = (y * c.width + x) * 4; if (d[q + 3] && d[q] + d[q + 1] + d[q + 2] >= thr) { sx += x; sy += y; n++; } }
+      }
+      if (n) e.anchorOfs = [Math.round(sx / n + 0.5 - cw / 2), Math.round(sy / n + 0.5 - ch / 2)];
+    }
     if (spec.anchor === 'content' || spec.anchor === 'bottom') {
       // place the effect by what is drawn (all frames together), not by its canvas centre / pixelfx stand-in pivot
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, cw = 0, ch = 0;
@@ -2223,7 +2281,8 @@
       e.follow = true;
     }
     if (spec.follow === 'tip') {
-      findBladeTips(e);
+      for (let i = e.start; i < Math.min(S.frames.length, e.start + e.len); i++) { const t = tipOf(i); if (t) e.keys[i] = { ...t }; }
+      e.follow = true;
       const at = spec.at || {};
       for (const k of Object.keys(e.keys)) e.keys[k] = { x: e.keys[k].x + (at.dx || 0), y: e.keys[k].y + (at.dy || 0) };
     }
@@ -2270,6 +2329,16 @@
       S.guides = { ...S.guides, cx: S.guides.cx + l, base: S.guides.base + t, top: S.guides.top + t, weapon: S.guides.weapon + t };
       S.frames.forEach(f => { f.ox += l; f.oy += t; });
     }
+    if (o.tips || o.autoTrail) {
+      // blade tip per frame: detected (gaps filled in between), then hand-set ones from o.tips { frame: {x, y} | {from, ...} }
+      S.autoFx.tips = trackTips();
+      for (const [k, v] of Object.entries(o.tips || {})) if (S.autoFx.tips[+k]) S.autoFx.tips[+k] = v.from ? apiPos({ ...v, frame: +k }) : { x: v.x, y: v.y };
+      S.autoFx.tips = S.autoFx.tips.map(t => ({ x: Math.round(t.x), y: Math.round(t.y) }));
+    }
+    if (o.autoTrail) {   // Sprite Aligner's automatic trail along the (tracked / hand-set) tip path of the swing frames
+      Object.assign(S.autoFx, { trail: true, spark: false, dust: false }, typeof o.autoTrail === 'object' ? o.autoTrail : {});
+      const keep = S.effects; runAutoFx(false); S.effects = [...keep.filter(e => !e.auto), ...S.effects.filter(e => e.auto)];
+    }
     for (const spec of o.effects || []) await apiEffect(spec, warnings);
     if (S.effects.length && o.autoExpand !== false) {   // grow the cell so no placed effect is cut at its edge
       let l = 0, t = 0, r = 0, b = 0;
@@ -2283,6 +2352,9 @@
         S.guides = { ...S.guides, cx: S.guides.cx + l, base: S.guides.base + t, top: S.guides.top + t, weapon: S.guides.weapon + t };
         S.frames.forEach(f => { f.ox += l; f.oy += t; });
         for (const e of S.effects) { e.x += l; e.y += t; for (const k of Object.keys(e.keys)) e.keys[k] = { x: e.keys[k].x + l, y: e.keys[k].y + t }; }
+        S.autoFx.tips = S.autoFx.tips.map(p => ({ x: p.x + l, y: p.y + t }));
+        for (const e of S.effects) if (e.auto === 'trail') { e.x = S.cellW / 2; e.y = S.cellH / 2; }   // cell-sized trail frames: redrawn for the new cell
+        refreshAutoFx();
         warnings.push(`cell grown by [${l}, ${t}, ${r}, ${b}] so effects are not cut`);
       }
     }
