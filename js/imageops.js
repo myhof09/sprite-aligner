@@ -779,7 +779,66 @@ const IO = (() => {
     }
   }
 
-  return { guessKey, keyMask, despill, fringeToOutline, remapColors, keyByTint, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
+  /** Key hue of a colour: cosine of its offset from grey to the key's offset, and that offset's length (tint strength). */
+  function keyHue(key) {
+    const km = (key[0] + key[1] + key[2]) / 3, kv = [key[0] - km, key[1] - km, key[2] - km], kn = Math.hypot(...kv) || 1;
+    return (r, g, b) => { const m = (r + g + b) / 3, v0 = r - m, v1 = g - m, v2 = b - m, n = Math.hypot(v0, v1, v2);
+      return { cos: n ? (v0 * kv[0] + v1 * kv[1] + v2 * kv[2]) / (n * kn) : 0, n, m }; };
+  }
+
+  /**
+   * Keep enclosed key-coloured pockets inside translucent bodies (jelly, glass, ghosts). With the background keyed
+   * everywhere (not only from the edges), a pocket = pixels the edge-connected key keeps but the all-over key removes.
+   * A pocket whose centre lies inside band [top, bottom] (fractions of its body's height, from the body's top) is put
+   * back (it is the body, tinted by the background behind it); pockets above / below (gaps between grass blades or
+   * hair, between feet / puddle drops) stay keyed. In place on the mask; returns { kept, keyed } pocket counts.
+   */
+  function keepPockets(img, mask, key, tol, edge, band, o = {}) {
+    const { w, h } = img, n = w * h;
+    const me = keyMask(img, key, tol, edge, { ...o, connected: true });
+    const { labels, comps } = components(me, w, h);
+    const pocket = new Uint8Array(n);
+    for (let p = 0; p < n; p++) if (me[p] && !mask[p]) pocket[p] = 1;
+    const pc = components(pocket, w, h);
+    const sum = new Map();
+    for (let p = 0; p < n; p++) { const id = pc.labels[p]; if (!id) continue;
+      const e = sum.get(id) || { y: 0, c: 0, body: labels[p] }; e.y += (p / w) | 0; e.c++; sum.set(id, e); }
+    const keep = new Set();
+    let kept = 0, keyed = 0;
+    for (const [id, e] of sum) {
+      const b = comps[e.body - 1], f = (e.y / e.c - b.y0) / Math.max(1, b.y1 - b.y0);
+      if (f >= band[0] && f <= band[1]) { keep.add(id); kept++; } else keyed++;
+    }
+    for (let p = 0; p < n; p++) if (keep.has(pc.labels[p])) mask[p] = 1;
+    return { kept, keyed };
+  }
+
+  /**
+   * Retint: inside the body (not within `inset` px of the background), pixels tinted toward the key's hue (a translucent
+   * body showing the background through it) get the hue of `to` at their own lightness: new = grey level m + the
+   * target's offset from grey scaled by m / (target's grey level), blended by how key-tinted the pixel is
+   * (cosine minCos..fullCos, tint strength minTint..fullTint). Returns a copy.
+   */
+  function retint(img, mask, key, o) {
+    const out = { w: img.w, h: img.h, data: new Uint8ClampedArray(img.data) }, d = out.data;
+    const hue = keyHue(key), to = o.to, tm = (to[0] + to[1] + to[2]) / 3 || 1, tv = to.map(c => c - tm);
+    const minCos = o.minCos ?? 0.5, fullCos = o.fullCos ?? 0.8, minTint = o.minTint ?? 8, fullTint = o.fullTint ?? 30;
+    const near = nearBackground(mask, img.w, img.h, o.inset ?? 3);
+    const ramp = (x, a, b) => Math.max(0, Math.min(1, (x - a) / (b - a)));
+    let changed = 0;
+    for (let p = 0; p < mask.length; p++) {
+      if (!mask[p] || near[p]) continue;
+      const i = p * 4, t = hue(d[i], d[i + 1], d[i + 2]);
+      const wgt = ramp(t.cos, minCos, fullCos) * ramp(t.n, minTint, fullTint);
+      if (!wgt) continue;
+      for (let c = 0; c < 3; c++) d[i + c] = d[i + c] + (t.m + tv[c] * t.m / tm - d[i + c]) * wgt;
+      changed++;
+    }
+    out.changed = changed;
+    return out;
+  }
+
+  return { keyHue, keepPockets, retint, guessKey, keyMask, despill, fringeToOutline, remapColors, keyByTint, softKey, smoothScale, components, detectFrames, detectPixelSize, matchHead, downscale, trim,
            removeLonePixels, dominantPalette, snapToPalette, medianCut, dist2, blank,
            K, KX, KY, mapFromImg, imgFromMap, groups, outlineRing, bodyAnchor, torsoAnchor, wand };
 })();

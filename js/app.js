@@ -21,6 +21,8 @@
     keyTint: 0,      // > 0: also key pixels tinted like the background (same hue direction, tint strength >= keyTint): dark specks of key colour
     remap: [],       // colour remap rules [{ src: [r,g,b], dst: [r,g,b], tol }] (e.g. match a part's colour to another sheet)
     fringe: false,   // recolour key-tinted edge pixels to the neighbouring outline colour (off: despill only)
+    keepPockets: null,   // [top, bottom] fractions of each body's height: enclosed key-coloured pockets there stay (translucent bodies); needs keyEdge off
+    retint: null,    // { to: [r,g,b], minCos, fullCos, minTint, fullTint, inset }: key-tinted pixels inside the body get the hue of `to` at their own lightness
     keyEdge: true, keyBorders: true, keyMarks: true,   // background: only what touches the image edge; panel lines; corner watermarks
     bodyFrac: 0.2, minPiece: 8,
     smooth: false,   // 부드러운 그림: soft-painted art, no pixel processing (soft key edge, smooth scaling, no palette)
@@ -141,6 +143,7 @@
   }
 
   // ---------- pipeline ----------
+  let pocketInfo = null, retintCount = 0;   // last rekey's keepPockets / retint results (API report)
   function rekey() {
     if (S.noKey) {   // --key none: no background removal; the image's own alpha is the mask, colours untouched
       mask = new Uint8Array(src.w * src.h);
@@ -154,11 +157,13 @@
     }
     mask = IO.keyMask(src, S.key, S.tol, S.edge, keyOpts());
     if (S.keyTint > 0) IO.keyByTint(src, mask, S.key, S.keyTint);
+    if (S.keepPockets && !S.keyEdge) pocketInfo = IO.keepPockets(src, mask, S.key, S.tol, S.edge, S.keepPockets, keyOpts());
     keyPreview = null;
     showKeyPending();
     const pre = S.fringe ? IO.fringeToOutline(src, mask, S.key) : src;
     keyed = IO.despill(pre, mask, S.key, S.despill);
     if (S.smooth) keyed = IO.softKey(keyed, mask, S.key, S.tol, S.edgeNeutral);   // soft, un-mixed edge (alpha in keyed)
+    if (S.retint) { keyed = IO.retint(keyed, mask, S.key, S.retint); retintCount = keyed.changed; }   // before the remap: the remap then matches a master
     if (S.remap && S.remap.length) keyed = IO.remapColors(keyed, mask, S.remap);   // after the soft edge, so its un-mixed colours can be remapped too
     ({ labels, comps } = IO.components(mask, src.w, src.h));
     const view = { w: src.w, h: src.h, data: new Uint8ClampedArray(keyed.data) };
@@ -2206,7 +2211,7 @@
     ({ canvas: srcCanvas, img: src } = await loadImage(p.srcURL));
     const { frames, app, version, fxAssets, ...settings } = p;
     // (projects from before the edge-connected background removal keep the old one: the same pixels as when saved)
-    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [], keyTint: 0, edgeNeutral: false }, settings);
+    Object.assign(S, { effects: [], head: null, perFramePixel: false, keyEdge: false, keyBorders: false, keyMarks: false, smooth: false, fringe: false, remap: [], keyTint: 0, edgeNeutral: false, keepPockets: null, retint: null }, settings);
     pixelCands = []; fxSel = null;
     await loadAssets(fxAssets);
     rekey();
@@ -2493,6 +2498,89 @@
     return c.toDataURL('image/png');
   }
 
+  /**
+   * Key check on the finished frames against the source (o.verifyKey): each frame's opaque box is matched to the
+   * non-key box of its source region (scale = width ratio) and every pixel the key made transparent is looked up in the
+   * source (3x3 neighbourhood, all alike): eatenNear = source colour near the key but not key-hued (pink inner ears /
+   * red gums on a magenta key: RGB distance 120-200), eatenFar = clearly not background (> 200, not key-hued).
+   * holes = transparent pixels enclosed by the sprite (not connected to the cell border); holesInBand = those whose row
+   * is inside the keepPockets band (or o.verifyBand): a translucent body must have none. keyHued = opaque pixels still
+   * tinted like the key (cosine >= 0.85, tint >= 25; o.verifyHue [cos, tint] to be stricter): residue or an un-retinted body; clusters (cell px [x0, y0, x1, y1,
+   * count], biggest 24) give eraseResidue boxes. Each frame gets an overlay canvas: eaten red, holes yellow, key-hued cyan.
+   */
+  function verifyKey(o) {
+    const hue = IO.keyHue(S.key), key = S.key, sw = src.w, sd = src.data;
+    const dist = p => Math.hypot(sd[p * 4] - key[0], sd[p * 4 + 1] - key[1], sd[p * 4 + 2] - key[2]);
+    const keyish = (r, g, b) => { const t = hue(r, g, b); return t.cos >= 0.85 && t.n >= 25; };
+    const [hc, hn] = o.verifyHue || [0.85, 25], huedOut = (r, g, b) => { const t = hue(r, g, b); return t.cos >= hc && t.n >= hn; };   // stricter for a retinted body, e.g. [0.6, 8]
+    const cls = p => { const d = dist(p); if (d <= 120 || keyish(sd[p * 4], sd[p * 4 + 1], sd[p * 4 + 2])) return 0; return d <= 200 ? 1 : 2; };
+    const clusters = (pts, W) => {   // groups of points within 2 px -> [x0, y0, x1, y1, n]
+      const set = new Set(pts), seen = new Set(), out = [];
+      for (const s0 of pts) {
+        if (seen.has(s0)) continue;
+        const st = [s0], c = [W, 1e9, -1, -1, 0]; seen.add(s0);
+        while (st.length) {
+          const q = st.pop(), x = q % W, y = (q / W) | 0;
+          c[0] = Math.min(c[0], x); c[1] = Math.min(c[1], y); c[2] = Math.max(c[2], x + 1); c[3] = Math.max(c[3], y + 1); c[4]++;
+          for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) { const r = q + dy * W + dx; if (set.has(r) && !seen.has(r)) { seen.add(r); st.push(r); } }
+        }
+        out.push(c);
+      }
+      return out.sort((a, b) => b[4] - a[4]).slice(0, 24);
+    };
+    const frames = S.frames.map((f, fi) => {
+      const W = S.cellW, H = S.cellH, cc = cellCanvas(fi, { fx: false, effects: false }), cd = cc.getContext('2d').getImageData(0, 0, W, H).data;
+      let ox0 = W, oy0 = H, ox1 = -1, oy1 = -1;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (cd[(y * W + x) * 4 + 3] >= 128) { ox0 = Math.min(ox0, x); oy0 = Math.min(oy0, y); ox1 = Math.max(ox1, x); oy1 = y; }
+      const b = f.box;
+      let sx0 = 1e9, sy0 = 1e9, sx1 = -1;
+      for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (dist(y * sw + x) > 120) { sx0 = Math.min(sx0, x); sy0 = Math.min(sy0, y); sx1 = Math.max(sx1, x); }
+      const s = (ox1 - ox0) / Math.max(1, sx1 - sx0);
+      const at = (x, y) => {
+        const X = Math.round(sx0 + (x - ox0) / s), Y = Math.round(sy0 + (y - oy0) / s);
+        if (X < 1 || Y < 1 || X >= sw - 1 || Y >= src.h - 1) return 0;
+        const c0 = cls(Y * sw + X);
+        if (!c0) return 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (cls((Y + dy) * sw + X + dx) !== c0) return 0;
+        return c0;
+      };
+      // transparent pixels reachable from the cell border = outside; the rest = holes
+      const outside = new Uint8Array(W * H), st = [];
+      const seed = q => { if (!outside[q] && cd[q * 4 + 3] < 128) { outside[q] = 1; st.push(q); } };
+      for (let x = 0; x < W; x++) { seed(x); seed((H - 1) * W + x); }
+      for (let y = 0; y < H; y++) { seed(y * W); seed(y * W + W - 1); }
+      while (st.length) { const q = st.pop(), x = q % W; if (x > 0) seed(q - 1); if (x < W - 1) seed(q + 1); if (q >= W) seed(q - W); if (q < W * (H - 1)) seed(q + W); }
+      const band = S.keepPockets || o.verifyBand;
+      let keptNear = 0, eatenNear = 0, eatenFar = 0, holes = 0, holesInBand = 0;
+      const eaten = [], holePts = [], hued = [];
+      for (let y = oy0; y <= oy1; y++) for (let x = ox0; x <= ox1; x++) {
+        const q = y * W + x, a = cd[q * 4 + 3];
+        if (a >= 128) {
+          if (huedOut(cd[q * 4], cd[q * 4 + 1], cd[q * 4 + 2])) hued.push(q);
+          else if (at(x, y) === 1) keptNear++;
+          continue;
+        }
+        const c = at(x, y);
+        if (c === 1) { eatenNear++; eaten.push(q); } else if (c === 2) { eatenFar++; eaten.push(q); }
+        if (!outside[q]) {
+          holes++; holePts.push(q);
+          const fy = (y - oy0) / Math.max(1, oy1 - oy0);
+          if (band && fy >= band[0] && fy <= band[1]) holesInBand++;
+        }
+      }
+      const ov = document.createElement('canvas'); ov.width = W; ov.height = H;
+      const og = ov.getContext('2d'); og.fillStyle = '#286e3c'; og.fillRect(0, 0, W, H); og.drawImage(cc, 0, 0);
+      const id = og.getImageData(0, 0, W, H);
+      const paint = (pts, c) => pts.forEach(q => { id.data[q * 4] = c[0]; id.data[q * 4 + 1] = c[1]; id.data[q * 4 + 2] = c[2]; id.data[q * 4 + 3] = 255; });
+      paint(holePts, [255, 230, 0]); paint(hued, [0, 230, 255]); paint(eaten, [255, 0, 0]);
+      og.putImageData(id, 0, 0);
+      return { frame: fi, scale: +s.toFixed(3), keptNear, eatenNear, eatenFar, holes, holesInBand, holeClusters: clusters(holePts, W),
+        keyHued: hued.length, keyHuedClusters: clusters(hued, W), overlay: ov };
+    });
+    return { frames, eaten: frames.reduce((t, v) => t + v.eatenNear + v.eatenFar, 0),
+      holesInBand: frames.reduce((t, v) => t + v.holesInBand, 0), keyHued: frames.reduce((t, v) => t + v.keyHued, 0) };
+  }
+
   async function apiRun(o) {
     const set = (k, v) => { if (v !== undefined) S[k] = v; };
     set('smooth', o.smooth); set('keyEdge', o.keyEdge); set('fringe', o.fringe); set('despill', o.despill); set('tol', o.tol);
@@ -2502,6 +2590,8 @@
     if (o.key && !S.noKey) S.key = hexToRgb(o.key);
     S.grid = o.grid ? { cols: o.grid[0], rows: o.grid[1], count: o.frameCount } : o.frameSize ? { fw: o.frameSize[0], fh: o.frameSize[1], count: o.frameCount } : null;
     S.blendOut = o.blend || null;
+    if (o.keepPockets !== undefined) S.keepPockets = o.keepPockets;
+    if (o.retint !== undefined) S.retint = o.retint && { ...o.retint, to: typeof o.retint.to === 'string' ? hexToRgb(o.retint.to) : o.retint.to };
     if (o.remap) S.remap = o.remap.map(r => ({ src: typeof r.src === 'string' ? hexToRgb(r.src) : r.src, dst: typeof r.dst === 'string' ? hexToRgb(r.dst) : r.dst, tol: r.tol || 60, ...(r.box ? { box: r.box } : {}) }));
     const warnings = [];
     let image = o.image, rowInfo = null, loopInfo = null;
@@ -2556,6 +2646,23 @@
         }
         compose(f);
       }
+    }
+    // eraseResidue [{ frame, box: [x0, y0, x1, y1] cell px }]: key residue seen through 1-2 px gaps (fur, legs, rope fibres)
+    // that no key reaches: every key-hued pixel in the box (cosine to the key's hue >= 0.75, tint >= 12) is erased, the
+    // pixels around it stay. Hand-picked boxes (verifyKey lists the key-hued clusters): mouths / pink parts are never boxed.
+    for (const er of o.eraseResidue || []) {
+      const f = S.frames[er.frame];
+      if (!f) { warnings.push(`eraseResidue: no frame ${er.frame}`); continue; }
+      const hue = IO.keyHue(S.key), [bx0, by0, bx1, by1] = er.box;
+      let n = 0;
+      for (const [k, c] of frameMap(f)) {
+        const x = f.ox + KX(k), y = f.oy + KY(k);
+        if (x < bx0 || y < by0 || x >= bx1 || y >= by1 || !c[3]) continue;
+        const t = hue(c[0], c[1], c[2]);
+        if (t.cos >= 0.75 && t.n >= 12) { f.edits.set(k, [0, 0, 0, 0]); n++; }
+      }
+      compose(f);
+      if (!n) warnings.push(`eraseResidue frame ${er.frame}: nothing key-hued in [${er.box}]`);
     }
     if (o.removeIslands) {   // keep the biggest piece, drop the detached ones (floating crystals, wisps, …)
       const max = o.removeIslands.max || Infinity;
@@ -2652,6 +2759,9 @@
         });
       }
     }
+    const verify = o.verifyKey ? verifyKey(o) : null;
+    if (verify) verify.frames.forEach(v => { if (v.eatenNear || v.eatenFar) warnings.push(`verify frame ${v.frame + 1}: ${v.eatenNear} near-key + ${v.eatenFar} other non-key px keyed`);
+      if (v.holesInBand) warnings.push(`verify frame ${v.frame + 1}: ${v.holesInBand} hole px inside the body band`); });
     apiTiming = { top: timingTop, frames: frameExtra };
     render();
     const want = new Set(o.outputs || ['project', 'all', 'frames', 'timing']);
@@ -2662,6 +2772,7 @@
       if (want.has('frames')) await exportFrames();
       if (want.has('fxframes')) await exportFxFrames();
       if (want.has('timing')) exportTiming();
+      if (verify && o.verifyOverlay) for (const v of verify.frames) await savePNG(v.overlay, `verify/${S.name}_verify_${String(v.frame + 1).padStart(2, '0')}.png`);
       for (const pr of props) {   // extracted props: always written (they are what was asked for)
         await savePNG(pr.canvas, `${pr.file}.png`);
         download(new Blob([JSON.stringify(pr.json, null, 1)], { type: 'application/json' }), `${pr.file}.json`);
@@ -2670,6 +2781,8 @@
     const b64 = blob => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(blob); });
     return { frames: S.frames.length, cell: [S.cellW, S.cellH], pivot: { x: S.guides.cx, y: S.guides.base }, status: $('status').textContent,
       scale: S.smooth ? +(1 / S.pixel).toFixed(5) : null, shrink: S.smooth ? S.pixel : null, loop: loopInfo, row: rowInfo && { index: o.row, of: rowInfo.rows, y: [rowInfo.top, rowInfo.bottom] }, warnings,
+      pockets: pocketInfo, retinted: S.retint ? retintCount : undefined,
+      verify: verify && { ...verify, frames: verify.frames.map(({ overlay, ...v }) => v) },
       files: await Promise.all(got.map(async f => ({ name: f.name, base64: await b64(f.blob) }))) };
   }
   /**

@@ -22,6 +22,18 @@
 //        [--extract name=PIECE --extract-frame N (0-based) [--extract-at x,y | --extract-box x,y,w,h] [--extract-erase 2,3]
 //             [--extract-file path/without/ext] [--extract-pivot ground|center] [--extract-discard (only erase it)]]
 //             (repeatable: a piece -> its own PNG + pivot JSON, or just erased)
+//        [--keep-pockets T,B]   with --all-bg: enclosed key-coloured pockets whose centre is inside rows T..B (fractions of
+//             each body's height) stay: a translucent body (jelly, glass, ghost) tinted by the background is not holed;
+//             pockets above / below (gaps between grass blades, hair, feet) are keyed
+//        [--retint '#rrggbb[,minCos,fullCos,minTint,fullTint]']   key-tinted pixels inside the body (>= 3 px from the
+//             background) get this colour's hue at their own lightness (defaults 0.5,0.8,8,30); runs before --remap
+//        [--erase-residue F:x0,y0,x1,y1]   (repeatable; frame index, cell px of the exported frame) key residue seen
+//             through 1-2 px gaps: the key-hued pixels in the box are erased, the rest stays (never box a mouth)
+//        [--verify-key] [--verify-overlay] [--verify-band T,B] [--verify-hue COS,TINT]   key check of the finished frames against the source:
+//             eatenNear / eatenFar = non-key source pixels (near-key pink / red, or clearly not background) that came out
+//             transparent; holes (+ holesInBand) = transparent pixels enclosed by the sprite; keyHued = opaque pixels
+//             still tinted like the key, with clusters (cell px) for --erase-residue boxes; --verify-overlay writes
+//             verify/<name>_verify_XX.png (eaten red, holes yellow, key-hued cyan)
 //        [--spec job.json]   (any SpriteAligner.run option as JSON; its "image"/"project" may be file paths, as may
 //                             effects[].sheet.png / .json and effects[].recipe; command-line flags override it)
 //
@@ -51,7 +63,7 @@ const nums = v => v.split(',').map(Number);
 const num = n => (opt(n) !== undefined ? +opt(n) : undefined);
 const opt = n => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
 const videoArg = opt('video') && resolve(opt('video'));
-const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral', '--extract-discard'].includes(argv[i - 1])));
+const sheetArg = videoArg ? null : argv.find((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--') && !['--smooth', '--all-bg', '--fringe', '--no-loop', '--left', '--edge-neutral', '--extract-discard', '--verify-key', '--verify-overlay'].includes(argv[i - 1])));
 if (argv[0] === 'measure') { await measure(); process.exit(0); }
 if (argv[0] === 'heads') { await heads(); process.exit(0); }
 if (argv[0] === 'fx') { await fxCmd(); process.exit(0); }
@@ -97,7 +109,13 @@ const o = {
   row: num('row'), frameCount: num('frames'), targetHeight: num('target-height'), targetFrame: num('target-frame'),
   anchors: anchorArgs(),
   extract: extractArgs(),
+  keepPockets: opt('keep-pockets') ? nums(opt('keep-pockets')) : undefined,
+  retint: opt('retint') ? (([to, minCos, fullCos, minTint, fullTint]) => ({ to, ...(minCos ? { minCos: +minCos, fullCos: +fullCos, minTint: +minTint, fullTint: +fullTint } : {}) }))(opt('retint').split(',')) : undefined,
+  eraseResidue: argv.flatMap((a, i) => (a === '--erase-residue' ? [argv[i + 1]] : [])).map(r => { const [f, box] = r.split(':'); return { frame: +f, box: nums(box) }; }),
+  verifyKey: flag('verify-key') || flag('verify-overlay') || undefined, verifyOverlay: flag('verify-overlay') || undefined,
+  verifyBand: opt('verify-band') ? nums(opt('verify-band')) : undefined, verifyHue: opt('verify-hue') ? nums(opt('verify-hue')) : undefined,
 };
+if (!o.eraseResidue.length) o.eraseResidue = spec.eraseResidue;
 if (!o.remap.length) o.remap = spec.remap;
 if (!o.anchors.length) o.anchors = spec.anchors;
 if (!o.extract.length) o.extract = spec.extract;
@@ -330,7 +348,7 @@ try {
   const r = await page.evaluate(opts => window.SpriteAligner.run(opts), o);
   mkdirSync(out, { recursive: true });
   for (const f of r.files) { mkdirSync(dirname(join(out, f.name)), { recursive: true }); writeFileSync(join(out, f.name), Buffer.from(f.base64, 'base64')); }
-  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, shrink: r.shrink, row: r.row, video: videoVia && { via: videoVia, frames: o.videoFrames.length }, loop: r.loop, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
+  console.log(JSON.stringify({ frames: r.frames, cell: r.cell, pivot: r.pivot, scale: r.scale, shrink: r.shrink, row: r.row, video: videoVia && { via: videoVia, frames: o.videoFrames.length }, loop: r.loop, pockets: r.pockets, retinted: r.retinted, verify: r.verify, warnings: r.warnings, status: r.status, out, files: r.files.map(f => f.name), errors }, null, 2));
 } finally {
   await browser.close();
 }
